@@ -19,11 +19,26 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+*.spec
+pip-log.txt
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+*.cover
+*.mo
+*.pot
+*.log
+local_settings.py
+target/
 
 # Virtual Environment
 venv/
 env/
 ENV/
+.venv
 
 # IDE
 .vscode/
@@ -31,6 +46,15 @@ ENV/
 *.swp
 *.swo
 *~
+.spyderproject
+.spyproject
+.ropeproject
+.mypy_cache/
+.ruff_cache/
+
+# Claude / Qwen IDE config
+.claude/
+.qwen/
 
 # Environment variables (CONTAINS API KEYS - NEVER COMMIT)
 .env
@@ -42,14 +66,6 @@ ENV/
 *.db
 *.sqlite3
 
-# Logs
-*.log
-logs/
-
-# OS
-.DS_Store
-Thumbs.db
-
 # Node.js (Frontend)
 node_modules/
 frontend/dist/
@@ -58,9 +74,9 @@ frontend/.npm-cache/
 # Docker
 docker-compose.override.yml
 
-# Claude / Qwen IDE config
-.claude/
-.qwen/
+# OS
+.DS_Store
+Thumbs.db
 
 # Uploads
 uploads/
