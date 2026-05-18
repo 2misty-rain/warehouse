@@ -3,8 +3,7 @@
     <!-- Login Page -->
     <Login v-if="!isLoggedIn && !showRegister" @login-success="onLoginSuccess" @go-register="showRegister = true" />
     <!-- Register Page -->
-    <Register v-if="!isLoggedIn && showRegister" @go-login="showRegister = false" />
-
+    <Register v-else-if="!isLoggedIn && showRegister" @go-login="showRegister = false" />
     <!-- Main App -->
     <el-container v-else>
       <!-- Change Password Dialog -->
