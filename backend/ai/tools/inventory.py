@@ -31,8 +31,8 @@ def query_inventory(db, device_attribute=None, version=None, type=None, owner=No
         kw = f"%{keyword}%"
         query = query.filter((Inventory.device_id.like(kw)) | (Inventory.serial_number.like(kw)))
 
-    items = query.limit(50).all()
     total = query.count()
+    items = query.limit(50).all()
     results = [{
         "device_id": d.device_id, "version": d.version or "-", "type": d.type or "-",
         "device_attribute": d.device_attribute or "未分类", "owner": d.owner or "-",

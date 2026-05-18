@@ -39,7 +39,7 @@ def run(db, user_input: str, user_id: str = "default") -> dict:
 
     system_prompt = build_system_prompt(db)
     system_ctx = build_system_context(db)
-    history = get_history(db, user_id, limit=16)
+    history = get_history(db, user_id, limit=6)
     tools = get_tool_definitions()
 
     messages = [

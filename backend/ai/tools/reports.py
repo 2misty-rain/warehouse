@@ -46,6 +46,18 @@ def get_inventory_overview(db):
         Inventory.version == '4G', Inventory.iot_card_status == '开卡'
     ).count()
 
+    all_devices = db.query(Inventory).order_by(Inventory.device_id).all()
+    devices = [{
+        "device_id": d.device_id,
+        "version": d.version or "-",
+        "type": d.type or "-",
+        "packaging": d.packaging or "-",
+        "device_attribute": d.device_attribute or "未分类",
+        "owner": d.owner or "-",
+        "borrower": d.borrower or "-",
+        "iot_card_status": d.iot_card_status or "-"
+    } for d in all_devices]
+
     return {
         "success": True,
         "total": total, "available": available, "borrowed": borrowed,
@@ -53,5 +65,6 @@ def get_inventory_overview(db):
         "wifi_count": wifi_c, "g4_count": g4_c,
         "sleep_count": sleep_c, "fall_count": fall_c,
         "attribute_distribution": attr_map,
-        "active_iot_cards": active_iot
+        "active_iot_cards": active_iot,
+        "devices": devices
     }

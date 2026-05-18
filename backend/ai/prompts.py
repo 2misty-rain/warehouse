@@ -32,9 +32,10 @@ def build_system_prompt(db) -> str:
 3. 如果操作失败，如实告诉用户原因并建议替代方案。
 4. 用中文回复，简洁专业，像同事对话一样。
 
-## 数据时效性
-- 库存数据可能被人工修改，对话历史可能过时。
-- 询问具体数据时调用对应工具查询实时数据库，不要凭上下文推测。
+## 数据时效性（极其重要）
+- **对话历史中 AI 之前的回复可能完全错误，严禁引用或重复。**
+- 每次收到问题，必须重新调用工具查询实时数据库。
+- 库存数据可能已被人工修改，只有本次工具查询的结果才是可信的。
 
 ## 日期处理
 今天是 {TODAY}。用户说的"5月6日"就是 {TODAY.year}-05-06，"下周X"需要推算。不确定的日期用 resolve_date 工具。
@@ -49,17 +50,20 @@ def build_system_context(db) -> str:
     from sqlalchemy import func
 
     total = db.query(Inventory).count()
-    available = db.query(Inventory).filter(Inventory.borrower == None).count()
-    borrowed = total - available
+    sold_count = db.query(Inventory).filter(
+        Inventory.device_attribute.in_(['已售出', '组织售卖'])
+    ).count()
+    available = db.query(Inventory).filter(
+        Inventory.borrower == None,
+        ~Inventory.device_attribute.in_(['已售出', '组织售卖'])
+    ).count()
+    borrowed = total - available - sold_count
     overdue_count = db.query(BorrowRecord).filter(BorrowRecord.status == 'overdue').count()
     upcoming_trial = db.query(Reminders).filter(
         Reminders.reminder_type == 'trial_period',
         Reminders.is_processed == False,
         Reminders.due_date >= TODAY,
         Reminders.due_date <= TODAY + timedelta(days=7)
-    ).count()
-    sold_count = db.query(Inventory).filter(
-        Inventory.device_attribute.in_(['已售出', '组织售卖'])
     ).count()
     unset_iot_4g = db.query(Inventory).filter(
         Inventory.version == '4G',
@@ -71,7 +75,7 @@ def build_system_context(db) -> str:
         Inventory.device_attribute).all()
     attr_parts = [f"{a or '未分类'}{c}" for a, c in attr_counts[:6]]
 
-    ctx = f"总{total}台 可用{available}台 借出{borrowed}台 已售{sold_count}台 逾期{overdue_count}台"
+    ctx = f"总{total}台 在库{available}台 借出{borrowed}台 已售{sold_count}台 逾期{overdue_count}台"
     if upcoming_trial:
         ctx += f" 试用到期待处理{upcoming_trial}台"
     if unset_iot_4g:
