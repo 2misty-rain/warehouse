@@ -75,7 +75,7 @@
 <script>
 import * as echarts from 'echarts';
 import { onMounted, onUnmounted, ref } from 'vue';
-import { dashboardAPI, inventoryAPI } from '../api';
+import { dashboardAPI, inventoryAPI, reservationAPI } from '../api';
 import { Warning, CircleCloseFilled, Clock, Refresh } from '@element-plus/icons-vue';
 
 export default {
@@ -113,6 +113,15 @@ export default {
           overdueBorrows: data.overdue_borrows || 0,
           longTermBorrows: data.long_term_borrows || 0
         };
+
+        // admin 加载待处理预约数
+        const userInfo = JSON.parse(localStorage.getItem('user_info') || '{}');
+        if (userInfo.role === 'admin') {
+          try {
+            const r = await reservationAPI.getPendingCount();
+            stats.value.push({ label: '待处理预约', value: r.count, color: '#E6A23C' });
+          } catch {}
+        }
 
         // 2. 获取所有设备用于动态图表
         const invResp = await inventoryAPI.getAll({ skip: 0, limit: 1000 });
@@ -204,18 +213,27 @@ export default {
       });
     };
 
+    let refreshTimer = null;
+    const AUTO_REFRESH_INTERVAL = 30000; // 30秒自动刷新
+
     onMounted(() => {
       typeChartInstance = echarts.init(typeChart.value);
       versionChartInstance = echarts.init(versionChart.value);
       salesChartInstance = echarts.init(salesChart.value);
       loadAll();
       loadSalesTrend();
+      // 定时刷新
+      refreshTimer = setInterval(refreshAll, AUTO_REFRESH_INTERVAL);
+      // 监听AI操作后的数据变更事件
+      window.addEventListener('ai-data-changed', refreshAll);
     });
 
     onUnmounted(() => {
       if (typeChartInstance) typeChartInstance.dispose();
       if (versionChartInstance) versionChartInstance.dispose();
       if (salesChartInstance) salesChartInstance.dispose();
+      if (refreshTimer) clearInterval(refreshTimer);
+      window.removeEventListener('ai-data-changed', refreshAll);
     });
 
     return { stats, alerts, refreshing, loadingSales, error, lastUpdate,

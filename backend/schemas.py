@@ -58,10 +58,25 @@ class BatchIoTCardUpdate(BaseModel):
     iot_card_status: str
 
 
+class BatchInventoryUpdate(BaseModel):
+    device_ids: List[str]
+    version: Optional[str] = None
+    type: Optional[str] = None
+    packaging: Optional[str] = None
+    device_attribute: Optional[str] = None
+    owner: Optional[str] = None
+    borrower: Optional[str] = None
+    sales_person: Optional[str] = None
+    iot_card_status: Optional[str] = None
+    remarks: Optional[str] = None
+    supplementary_info: Optional[str] = None
+    delivery_date: Optional[date] = None
+
+
 # ========== Reminder Schemas ==========
 
 class ReminderBase(BaseModel):
-    device_id: str
+    device_id: Optional[str] = None
     reminder_type: Optional[str] = None
     due_date: Optional[date] = None
     description: Optional[str] = None
@@ -202,6 +217,48 @@ class OperationLogResponse(BaseModel):
     details: Optional[str] = None
     ip_address: Optional[str] = None
     created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ========== Reservation Schemas ==========
+
+class ReservationCreate(BaseModel):
+    quantity: int
+    version_req: Optional[str] = None
+    packaging_req: Optional[str] = None
+    client_name: Optional[str] = None
+    sales_person: Optional[str] = None
+    required_date: Optional[date] = None
+    purpose: Optional[str] = None
+
+
+class ReservationApprove(BaseModel):
+    assigned_devices: List[str]
+    admin_remarks: Optional[str] = None
+
+
+class ReservationReject(BaseModel):
+    admin_remarks: Optional[str] = None
+
+
+class ReservationResponse(BaseModel):
+    id: int
+    applicant: str
+    quantity: int
+    version_req: Optional[str] = None
+    packaging_req: Optional[str] = None
+    client_name: Optional[str] = None
+    sales_person: Optional[str] = None
+    required_date: Optional[date] = None
+    purpose: Optional[str] = None
+    status: str
+    admin_username: Optional[str] = None
+    assigned_devices: Optional[str] = None
+    admin_remarks: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

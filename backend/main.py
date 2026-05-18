@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import logging.handlers
@@ -8,7 +9,7 @@ import os
 import sys
 
 from database import engine, Base, get_db
-from routers import inventory, borrow, ai, dashboard, reminders, analysis, auth
+from routers import inventory, borrow, ai, dashboard, reminders, analysis, auth, reservation
 
 
 def setup_logging():
@@ -66,6 +67,14 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"success": False, "detail": str(exc.detail)},
+    )
+
+
 @app.middleware("http")
 async def global_exception_middleware(request: Request, call_next):
     try:
@@ -89,6 +98,7 @@ app.include_router(dashboard.router)
 app.include_router(reminders.router)
 app.include_router(analysis.router)
 app.include_router(auth.router)
+app.include_router(reservation.router)
 
 
 @app.get("/operation-logs")

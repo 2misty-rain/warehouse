@@ -19,7 +19,9 @@
           </el-button>
         </el-form-item>
       </el-form>
-      <p class="login-hint">默认管理员账号: admin / admin123</p>
+      <p class="login-link">
+        没有账号？<a href="#" @click.prevent="$emit('go-register')">立即注册</a>
+      </p>
     </div>
   </div>
 </template>
@@ -93,10 +95,14 @@ const handleLogin = async () => {
   color: #909399;
   margin: 0;
 }
-.login-hint {
+.login-link {
   text-align: center;
-  color: #c0c4cc;
-  font-size: 12px;
+  color: #909399;
+  font-size: 14px;
   margin-top: 16px;
+}
+.login-link a {
+  color: #409EFF;
+  text-decoration: none;
 }
 </style>

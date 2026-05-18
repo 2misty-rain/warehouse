@@ -27,6 +27,13 @@ class UserRole(str, PyEnum):
     VIEWER = "viewer"
 
 
+class ReservationStatus(str, PyEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    FULFILLED = "fulfilled"
+    REJECTED = "rejected"
+
+
 class Inventory(Base):
     __tablename__ = "inventory"
 
@@ -52,7 +59,7 @@ class Reminders(Base):
     __tablename__ = "reminders"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    device_id = Column(String(50), nullable=False, comment='设备号')
+    device_id = Column(String(50), nullable=True, comment='设备号(可选)')
     reminder_type = Column(String(50), comment='提醒类型')
     due_date = Column(Date, comment='到期日期')
     description = Column(Text, comment='描述')
@@ -126,3 +133,24 @@ class ConversationHistory(Base):
     role = Column(String(20), nullable=False, comment='角色：user/assistant/system')
     content = Column(Text, nullable=False, comment='对话内容')
     created_at = Column(DateTime, server_default=func.now(), comment='创建时间')
+
+
+class Reservation(Base):
+    """出库预约申请表"""
+    __tablename__ = "reservations"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    applicant = Column(String(50), nullable=False, comment='申请人用户名')
+    quantity = Column(Integer, nullable=False, comment='需求设备数量')
+    version_req = Column(String(20), comment='版本要求：WiFi/4G/不限')
+    packaging_req = Column(String(20), comment='包装要求：简约/精品/不限')
+    client_name = Column(String(100), comment='甲方/归属人')
+    sales_person = Column(String(100), comment='销售')
+    required_date = Column(Date, comment='需求日期')
+    purpose = Column(Text, comment='用途说明')
+    status = Column(String(20), default='pending', comment='状态：pending/approved/fulfilled/rejected')
+    admin_username = Column(String(50), comment='处理人用户名')
+    assigned_devices = Column(Text, comment='分配的设备号JSON数组')
+    admin_remarks = Column(Text, comment='管理员备注')
+    created_at = Column(DateTime, server_default=func.now(), comment='创建时间')
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment='更新时间')

@@ -62,8 +62,8 @@
       width="50%"
     >
       <el-form :model="newReminder" :rules="rules" ref="formRef" label-width="120px">
-        <el-form-item label="设备号" prop="device_id">
-          <el-input v-model="newReminder.device_id" placeholder="例如：CAA241100458"></el-input>
+        <el-form-item label="关联设备号" prop="device_id">
+          <el-input v-model="newReminder.device_id" placeholder="可选，例如：CAA241100458"></el-input>
         </el-form-item>
         <el-form-item label="提醒类型" prop="reminder_type">
           <el-select v-model="newReminder.reminder_type" placeholder="请选择提醒类型">
@@ -115,7 +115,6 @@ export default {
     });
     
     const rules = {
-      device_id: [{ required: true, message: '请输入设备号', trigger: 'blur' }],
       reminder_type: [{ required: true, message: '请选择提醒类型', trigger: 'change' }],
       due_date: [{ required: true, message: '请选择到期日期', trigger: 'change' }]
     };

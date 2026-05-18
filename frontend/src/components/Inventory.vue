@@ -38,15 +38,13 @@
         <el-option label="精品" value="精品"></el-option>
       </el-select>
 
-      <el-select v-model="filterIoTCard" placeholder="IoT卡" clearable style="width: 100px; margin-right: 10px;" @change="handleSearch">
+      <el-select v-model="filterIoTCard" placeholder="IoT卡(4G)" clearable style="width: 110px; margin-right: 10px;" @change="onIoTCardFilterChange">
         <el-option label="已开卡" value="开卡"></el-option>
         <el-option label="已关卡" value="关卡"></el-option>
       </el-select>
       
       <el-select v-model="filterOwner" placeholder="归属人" clearable style="width: 150px; margin-right: 10px;" @change="handleSearch">
-        <el-option label="大家保险" value="大家保险"></el-option>
-        <el-option label="银丰" value="银丰"></el-option>
-        <el-option label="河北物流集团" value="河北物流集团"></el-option>
+        <el-option v-for="owner in ownerOptions" :key="owner" :label="owner" :value="owner"></el-option>
       </el-select>
 
       <el-date-picker
@@ -71,6 +69,9 @@
         <el-icon><Download /></el-icon> 导出
       </el-button>
       <el-button @click="clearFilters" style="margin-left: 10px;">清除筛选</el-button>
+      <el-button v-if="selectedIds.length > 0" type="primary" @click="openBatchEdit" style="margin-left: 10px;">
+        批量编辑 ({{ selectedIds.length }})
+      </el-button>
       <el-button v-if="selectedIds.length > 0" type="danger" @click="batchDelete" style="margin-left: 10px;">
         批量删除 ({{ selectedIds.length }})
       </el-button>
@@ -143,7 +144,7 @@
           <el-input v-model="form.device_id" :disabled="!!editingItem"></el-input>
         </el-form-item>
         <el-form-item label="版本" prop="version">
-          <el-select v-model="form.version" placeholder="请选择版本">
+          <el-select v-model="form.version" placeholder="请选择版本" @change="onVersionChange">
             <el-option label="WiFi" value="WiFi"></el-option>
             <el-option label="4G" value="4G"></el-option>
           </el-select>
@@ -272,7 +273,7 @@
         <p>1. 请下载导入模板，按照模板格式填写数据</p>
         <p>2. 支持CSV文件格式</p>
         <p>3. 必填字段：设备号。版本可选(WiFi/4G)，类型可选(睡眠/跌倒)，包装可选(简约/精品)</p>
-        <p>4. 如果设备号已存在，该行数据将跳过</p>
+        <p>4. 如果设备号已存在，将覆盖更新该设备信息</p>
       </el-alert>
       
       <div style="text-align: center; margin-bottom: 20px;">
@@ -332,6 +333,73 @@
       </template>
     </el-dialog>
 
+    <!-- 批量编辑对话框 -->
+    <el-dialog
+      title="批量编辑设备"
+      v-model="showBatchEditDialog"
+      width="600px"
+    >
+      <el-alert
+        title="正在编辑 {{ selectedIds.length }} 台设备"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 16px;"
+      >
+        只填写需要批量修改的字段，留空的字段不会被修改。如需清空某个字段，请输入一个空格后回车。
+      </el-alert>
+      <el-form :model="batchEditForm" label-width="100px">
+        <el-form-item label="设备属性">
+          <el-select v-model="batchEditForm.device_attribute" placeholder="不修改" clearable>
+            <el-option label="产品演示" value="产品演示"></el-option>
+            <el-option label="技术开发/测试" value="技术开发/测试"></el-option>
+            <el-option label="内部试用" value="内部试用"></el-option>
+            <el-option label="商机试用" value="商机试用"></el-option>
+            <el-option label="特殊占用" value="特殊占用"></el-option>
+            <el-option label="现有库存" value="现有库存"></el-option>
+            <el-option label="异常处理" value="异常处理"></el-option>
+            <el-option label="组织售卖" value="组织售卖"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="归属人">
+          <el-input v-model="batchEditForm.owner" placeholder="不修改" clearable></el-input>
+        </el-form-item>
+        <el-form-item label="领用人">
+          <el-input v-model="batchEditForm.borrower" placeholder="不修改" clearable></el-input>
+        </el-form-item>
+        <el-form-item label="销售">
+          <el-input v-model="batchEditForm.sales_person" placeholder="不修改" clearable></el-input>
+        </el-form-item>
+        <el-form-item label="IoT卡状态" v-if="!batchHasWifiDevice">
+          <el-select v-model="batchEditForm.iot_card_status" placeholder="不修改" clearable>
+            <el-option label="开卡" value="开卡"></el-option>
+            <el-option label="关卡" value="关卡"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="batchEditForm.remarks" type="textarea" placeholder="不修改"></el-input>
+        </el-form-item>
+        <el-form-item label="补充信息">
+          <el-input v-model="batchEditForm.supplementary_info" type="textarea" placeholder="不修改"></el-input>
+        </el-form-item>
+        <el-form-item label="交付时间">
+          <el-date-picker
+            v-model="batchEditForm.delivery_date"
+            type="date"
+            placeholder="不修改"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            clearable>
+          </el-date-picker>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showBatchEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitBatchEdit" :loading="batchEditing">
+          确认批量更新
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 设备详情对话框 -->
     <el-dialog title="设备详情" v-model="showDetailDialog" width="700px">
       <div v-if="detailData" style="max-height: 500px; overflow-y: auto;">
@@ -370,7 +438,7 @@
 </template>
 
 <script>
-import { ref, onMounted, reactive, computed } from 'vue';
+import { ref, onMounted, onUnmounted, reactive, computed } from 'vue';
 import { inventoryAPI } from '../api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Upload, Download, UploadFilled } from '@element-plus/icons-vue';
@@ -392,6 +460,19 @@ export default {
     // 批量录入
     const showBatchAddDialog = ref(false);
     const batchAdding = ref(false);
+    const showBatchEditDialog = ref(false);
+    const batchEditing = ref(false);
+    const batchHasWifiDevice = ref(false);
+    const batchEditForm = reactive({
+      device_attribute: '',
+      owner: '',
+      borrower: '',
+      sales_person: '',
+      iot_card_status: '',
+      remarks: '',
+      supplementary_info: '',
+      delivery_date: null
+    });
     const batchFormRows = ref([
       { device_id: '', version: 'WiFi', type: '睡眠', packaging: '简约', device_attribute: '现有库存', owner: '', remarks: '' }
     ]);
@@ -427,6 +508,7 @@ export default {
     const filterType = ref('');
     const filterPackaging = ref('');
     const filterOwner = ref(''); // 归属人筛选
+    const ownerOptions = ref([]); // 动态归属人列表
     const filterDeliveryDateRange = ref(null); // 交付时间范围筛选
     const filterIoTCard = ref('');
     
@@ -489,6 +571,21 @@ export default {
       editingItem.value = null;
     };
 
+    // 版本切换时清除IoT卡状态（WiFi设备不需要IoT卡）
+    const onVersionChange = (val) => {
+      if (val === 'WiFi') {
+        form.iot_card_status = '';
+      }
+    };
+
+    // IoT卡筛选时自动切换到4G版本（因为只有4G设备有IoT卡）
+    const onIoTCardFilterChange = (val) => {
+      if (val && filterVersion.value !== '4G') {
+        filterVersion.value = '4G';
+      }
+      handleSearch();
+    };
+
     const form = reactive({
       serial_number: '',
       version: 'WiFi',
@@ -510,6 +607,15 @@ export default {
     };
     
     const formRef = ref(null);
+
+    const loadOwners = async () => {
+      try {
+        const owners = await inventoryAPI.getOwners();
+        ownerOptions.value = owners || [];
+      } catch (e) {
+        console.error('加载归属人列表失败:', e);
+      }
+    };
 
     const loadInventory = async () => {
       loading.value = true;
@@ -602,7 +708,8 @@ export default {
         loadInventory(); // 重新加载列表
       } catch (error) {
         console.error('提交表单失败:', error);
-        ElMessage.error('操作失败');
+        const detail = error.response?.data?.detail;
+        ElMessage.error(detail || '操作失败');
       }
     };
 
@@ -632,6 +739,46 @@ export default {
     const selectedIds = ref([]);
     const handleSelectionChange = (rows) => { selectedIds.value = rows.map(r => r.device_id); };
 
+    // 批量编辑
+    const openBatchEdit = () => {
+      // 重置表单
+      Object.keys(batchEditForm).forEach(k => {
+        batchEditForm[k] = k === 'delivery_date' ? null : '';
+      });
+      // 检查选中设备中是否有WiFi设备，WiFi设备无IoT卡不应显示IoT卡编辑
+      const selectedSet = new Set(selectedIds.value);
+      batchHasWifiDevice.value = inventoryList.value.some(
+        d => selectedSet.has(d.device_id) && d.version === 'WiFi'
+      );
+      showBatchEditDialog.value = true;
+    };
+
+    const submitBatchEdit = async () => {
+      // 构建只包含非空字段的更新数据
+      const updateData = {};
+      for (const [key, value] of Object.entries(batchEditForm)) {
+        if (value !== null && value !== '' && value !== undefined) {
+          updateData[key] = value;
+        }
+      }
+      if (Object.keys(updateData).length === 0) {
+        ElMessage.warning('请至少填写一个要修改的字段');
+        return;
+      }
+      batchEditing.value = true;
+      try {
+        const res = await inventoryAPI.batchUpdate(selectedIds.value, updateData);
+        ElMessage.success(res.message || `成功更新 ${res.updated} 台设备`);
+        showBatchEditDialog.value = false;
+        selectedIds.value = [];
+        loadInventory();
+      } catch (e) {
+        ElMessage.error(e.response?.data?.detail || '批量编辑失败');
+      } finally {
+        batchEditing.value = false;
+      }
+    };
+
     // 批量删除
     const batchDelete = async () => {
       try {
@@ -645,10 +792,23 @@ export default {
       }
     };
 
-    // 导出库存数据
+    // 导出库存数据（带入当前筛选条件）
     const exportInventory = () => {
       const token = localStorage.getItem('access_token');
-      const url = `/api/inventory/export/stream?token=${encodeURIComponent(token || '')}`;
+      const params = new URLSearchParams();
+      params.set('token', token || '');
+      if (searchText.value) params.set('search', searchText.value);
+      if (filterAttribute.value) params.set('device_attribute', filterAttribute.value);
+      if (filterVersion.value) params.set('version', filterVersion.value);
+      if (filterType.value) params.set('type', filterType.value);
+      if (filterPackaging.value) params.set('packaging', filterPackaging.value);
+      if (filterOwner.value) params.set('owner', filterOwner.value);
+      if (filterIoTCard.value) params.set('iot_card_status', filterIoTCard.value);
+      if (filterDeliveryDateRange.value && filterDeliveryDateRange.value.length === 2) {
+        params.set('delivery_date_start', filterDeliveryDateRange.value[0]);
+        params.set('delivery_date_end', filterDeliveryDateRange.value[1]);
+      }
+      const url = `/api/inventory/export/stream?${params.toString()}`;
       window.open(url, '_blank');
       ElMessage.success('正在导出，请稍候...');
     };
@@ -702,6 +862,12 @@ export default {
 
     onMounted(() => {
       loadInventory();
+      loadOwners();
+      window.addEventListener('ai-data-changed', loadInventory);
+    });
+
+    onUnmounted(() => {
+      window.removeEventListener('ai-data-changed', loadInventory);
     });
 
     return {
@@ -725,6 +891,7 @@ export default {
       filterType,
       filterPackaging,
       filterOwner,
+      ownerOptions,
       filterDeliveryDateRange,
       importFile,
       importing,
@@ -733,6 +900,8 @@ export default {
       getAttributeType,
       handleSearch,
       clearFilters,
+      onVersionChange,
+      onIoTCardFilterChange,
       editItem,
       deleteItem,
       showDetail,
@@ -743,6 +912,8 @@ export default {
       downloadTemplate,
       selectedIds, handleSelectionChange, batchDelete,
       showBatchAddDialog, batchAdding, batchFormRows, submitBatchAdd,
+      showBatchEditDialog, batchEditing, batchHasWifiDevice, batchEditForm,
+      openBatchEdit, submitBatchEdit,
       exportInventory,
       handleFileChange,
       submitImport,

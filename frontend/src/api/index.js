@@ -41,6 +41,8 @@ export const authAPI = {
   register: (data) => api.post('/auth/register', data),
   getMe: () => api.get('/auth/me'),
   getUsers: () => api.get('/auth/users'),
+  changePassword: (data) => api.put('/auth/change-password', data),
+  updateUser: (id, data) => api.put(`/auth/users/${id}`, data),
 };
 
 // ========== Inventory ==========
@@ -54,9 +56,10 @@ export const inventoryAPI = {
   delete: (id) => api.delete(`/inventory/${id}`),
   updateIoTCard: (deviceId, status) => api.put(`/inventory/${deviceId}/iot-card`, { device_id: deviceId, iot_card_status: status }),
   batchUpdateIoTCard: (deviceIds, status) => api.post('/inventory/batch/iot-card', { device_ids: deviceIds, iot_card_status: status }),
+  getOwners: () => api.get('/inventory/owners'),
   importCSV: (formData) => api.post('/inventory/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   batchDelete: (deviceIds) => api.post('/inventory/batch/delete', { device_ids: deviceIds }),
-  batchUpdateAttribute: (deviceIds, attribute) => api.post('/inventory/batch/update-attribute', { device_ids: deviceIds, device_attribute: attribute }),
+  batchUpdate: (deviceIds, updateData) => api.post('/inventory/batch/update', { device_ids: deviceIds, ...updateData }),
 };
 
 // ========== Reminders ==========
@@ -69,11 +72,9 @@ export const reminderAPI = {
 
 // ========== AI ==========
 export const aiAPI = {
-  parse: (data) => api.post('/ai/parse', data),
-  execute: (data) => api.post('/ai/execute', data),
   chat: (data) => api.post('/ai/chat', data, { timeout: 60000 }),
-  executeAction: (data) => api.post('/ai/execute-action', data),
   getSuggestions: () => api.get('/ai/suggestions'),
+  clearHistory: () => api.post('/ai/clear-history'),
 };
 
 // ========== Dashboard ==========
@@ -90,6 +91,16 @@ export const borrowAPI = {
   delete: (id) => api.delete(`/borrow/${id}`),
   return: (id, data) => api.post(`/borrow/${id}/return`, data),
   getOverdue: () => api.get('/borrow/overdue/list')
+};
+
+// ========== Reservation ==========
+export const reservationAPI = {
+  create: (data) => api.post('/reservation', data),
+  getList: (params = {}) => api.get('/reservation', { params }),
+  getById: (id) => api.get(`/reservation/${id}`),
+  approve: (id, data) => api.post(`/reservation/${id}/approve`, data),
+  reject: (id, data) => api.post(`/reservation/${id}/reject`, data),
+  getPendingCount: () => api.get('/reservation/pending-count'),
 };
 
 // ========== Analysis ==========

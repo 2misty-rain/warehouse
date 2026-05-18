@@ -9,12 +9,13 @@ from database import get_db
 from models import Inventory, BorrowRecord
 from schemas import (
     InventoryCreate, InventoryUpdate, InventoryResponse,
-    IoTCardUpdate, BatchIoTCardUpdate,
+    IoTCardUpdate, BatchIoTCardUpdate, BatchInventoryUpdate,
 )
 from crud import (
     get_inventory, get_inventory_by_device_id, create_inventory,
     update_inventory, delete_inventory, update_iot_card_status,
-    batch_update_iot_card_status, get_device_timeline
+    batch_update_iot_card_status, batch_update_inventory_fields,
+    get_device_timeline
 )
 from auth import get_optional_user
 
@@ -80,10 +81,49 @@ def read_inventory(
 # ---- 静态路由必须在 /{device_id} 之前定义 ----
 
 @router.get("/export/stream")
-def export_inventory(db: Session = Depends(get_db)):
+def export_inventory(
+    db: Session = Depends(get_db),
+    search: str = "",
+    device_attribute: str = "", version: str = "",
+    type: str = "", packaging: str = "", owner: str = "",
+    iot_card_status: str = "",
+    delivery_date_start: Optional[str] = None,
+    delivery_date_end: Optional[str] = None,
+):
     try:
-        from datetime import datetime
-        devices = db.query(Inventory).all()
+        query = db.query(Inventory)
+
+        if search:
+            pattern = f"%{search}%"
+            query = query.filter(
+                (Inventory.device_id.like(pattern)) |
+                (Inventory.serial_number.like(pattern)) |
+                (Inventory.owner.like(pattern))
+            )
+        if device_attribute:
+            query = query.filter(Inventory.device_attribute == device_attribute)
+        if version:
+            query = query.filter(Inventory.version == version)
+        if type:
+            query = query.filter(Inventory.type == type)
+        if packaging:
+            query = query.filter(Inventory.packaging == packaging)
+        if owner:
+            query = query.filter(Inventory.owner == owner)
+        if iot_card_status:
+            query = query.filter(Inventory.iot_card_status == iot_card_status)
+        if delivery_date_start:
+            try:
+                query = query.filter(Inventory.delivery_date >= datetime.strptime(delivery_date_start, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+        if delivery_date_end:
+            try:
+                query = query.filter(Inventory.delivery_date <= datetime.strptime(delivery_date_end, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+
+        devices = query.all()
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
@@ -121,6 +161,16 @@ WiFi,DEV001,睡眠,简约,现有库存,张三,,,,,,2024-01-01
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=inventory_import_template.csv"}
     )
+
+
+@router.get("/owners")
+def get_owners(db: Session = Depends(get_db)):
+    """获取所有不重复的归属人列表（动态，用于筛选下拉）"""
+    results = db.query(Inventory.owner).filter(
+        Inventory.owner.isnot(None),
+        Inventory.owner != ''
+    ).distinct().order_by(Inventory.owner).all()
+    return [r[0] for r in results]
 
 
 @router.get("/{device_id}", response_model=InventoryResponse)
@@ -253,6 +303,26 @@ def batch_update_iot_card(data: BatchIoTCardUpdate, db: Session = Depends(get_db
     return {"message": f"批量更新完成", **result}
 
 
+@router.post("/batch/update")
+def batch_update_inventory(
+    request: Request,
+    data: BatchInventoryUpdate,
+    db: Session = Depends(get_db),
+    user=Depends(get_optional_user)
+):
+    """批量编辑设备：只更新非空字段，留空字段保持不变"""
+    update_data = data.model_dump(exclude_unset=True)
+    result = batch_update_inventory_fields(
+        db, data.device_ids, update_data,
+        username=_get_username(request)
+    )
+    return {
+        "message": f"成功更新 {result['updated']} 台设备"
+        + (f"，失败 {len(result['failed'])} 台" if result['failed'] else ""),
+        **result
+    }
+
+
 @router.post("/import")
 async def import_inventory(
     file: UploadFile = File(...), db: Session = Depends(get_db),
@@ -310,15 +380,11 @@ async def import_inventory(
                     continue
 
                 existing = get_inventory_by_device_id(db, device_id)
-                if existing:
-                    errors.append(f"第{row_num}行：设备号 {device_id} 已存在")
-                    error_count += 1
-                    continue
-
+                serial_number = cleaned_row.get('序号') or device_id
                 delivery_date_str = cleaned_row.get('交付时间', '').strip()
-                inventory_data = InventoryCreate(
+
+                update_data = InventoryUpdate(
                     version=cleaned_row.get('版本', ''),
-                    device_id=device_id,
                     type=cleaned_row.get('类型', ''),
                     packaging=cleaned_row.get('包装', ''),
                     device_attribute=cleaned_row.get('设备属性', ''),
@@ -331,7 +397,37 @@ async def import_inventory(
                     delivery_date=datetime.strptime(delivery_date_str, '%Y-%m-%d').date() if delivery_date_str else None
                 )
 
-                create_inventory(db, inventory_data)
+                if existing:
+                    # 覆盖更新已有设备
+                    update_inventory(db, device_id, update_data, username=_get_username(request))
+                    success_count += 1
+                    continue
+
+                # 检查序号冲突（仅对新建设备）
+                existing_serial = db.query(Inventory).filter(
+                    Inventory.serial_number == serial_number
+                ).first()
+                if existing_serial:
+                    errors.append(f"第{row_num}行：序号 {serial_number} 已存在（设备 {existing_serial.device_id}）")
+                    error_count += 1
+                    continue
+
+                create_data = InventoryCreate(
+                    serial_number=serial_number,
+                    device_id=device_id,
+                    version=update_data.version,
+                    type=update_data.type,
+                    packaging=update_data.packaging,
+                    device_attribute=update_data.device_attribute,
+                    owner=update_data.owner,
+                    borrower=update_data.borrower,
+                    sales_person=update_data.sales_person,
+                    iot_card_status=update_data.iot_card_status,
+                    remarks=update_data.remarks,
+                    supplementary_info=update_data.supplementary_info,
+                    delivery_date=update_data.delivery_date
+                )
+                create_inventory(db, create_data, username=_get_username(request))
                 success_count += 1
             except Exception as e:
                 errors.append(f"第{row_num}行：{str(e)}")

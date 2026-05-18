@@ -93,6 +93,31 @@ def batch_update_iot_card_status(db: Session, device_ids: list, status: str, use
     return {"updated": updated, "failed": failed}
 
 
+def batch_update_inventory_fields(db: Session, device_ids: list, update_data: dict, username: str = "system") -> dict:
+    """批量更新设备字段，只更新非空字段"""
+    updated = 0
+    failed = []
+    # 过滤掉 None 值和空的 device_ids
+    fields_to_update = {k: v for k, v in update_data.items()
+                        if v is not None and v != '' and k != 'device_ids'}
+    if not fields_to_update:
+        return {"updated": 0, "failed": device_ids, "message": "没有要更新的字段"}
+
+    for device_id in device_ids:
+        device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
+        if not device:
+            failed.append(device_id)
+            continue
+        for key, value in fields_to_update.items():
+            setattr(device, key, value)
+        device.updated_at = datetime.utcnow()
+        updated += 1
+        _log_operation(db, username, "batch_update", device_id, fields_to_update)
+
+    db.commit()
+    return {"updated": updated, "failed": failed}
+
+
 # ========== Reminder CRUD ==========
 
 def get_reminders(db: Session, is_processed: bool = None):
@@ -608,3 +633,138 @@ def load_conversation_history(db: Session, user_id: str, limit: int = 20):
     ).order_by(ConversationHistory.created_at.desc()).limit(limit).all()
 
     return [{"role": r.role, "content": r.content} for r in reversed(records)]
+
+
+# ========== Reservation CRUD ==========
+
+def create_reservation(db: Session, data: dict, applicant: str):
+    from models import Reservation
+    reservation = Reservation(
+        applicant=applicant,
+        quantity=data.get('quantity', 1),
+        version_req=data.get('version_req', ''),
+        packaging_req=data.get('packaging_req', ''),
+        client_name=data.get('client_name', ''),
+        sales_person=data.get('sales_person', ''),
+        required_date=data.get('required_date'),
+        purpose=data.get('purpose', ''),
+        status='pending'
+    )
+    db.add(reservation)
+    db.commit()
+    db.refresh(reservation)
+    return reservation
+
+
+def get_reservations(db: Session, applicant: str = None, status: str = None,
+                     skip: int = 0, limit: int = 100):
+    from models import Reservation
+    query = db.query(Reservation)
+    if applicant:
+        query = query.filter(Reservation.applicant == applicant)
+    if status:
+        query = query.filter(Reservation.status == status)
+    total = query.count()
+    items = query.order_by(Reservation.created_at.desc()).offset(skip).limit(limit).all()
+    return {"total": total, "items": items}
+
+
+def get_reservation_by_id(db: Session, reservation_id: int):
+    from models import Reservation
+    return db.query(Reservation).filter(Reservation.id == reservation_id).first()
+
+
+def get_pending_reservations_count(db: Session) -> int:
+    from models import Reservation
+    return db.query(Reservation).filter(Reservation.status == 'pending').count()
+
+
+def approve_reservation(db: Session, reservation_id: int, assigned_devices: list,
+                        admin_username: str, admin_remarks: str = None):
+    import json
+    from models import Reservation
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation:
+        raise ValueError("申请不存在")
+    if reservation.status != 'pending':
+        raise ValueError(f"申请状态为 {reservation.status}，无法审批")
+
+    reservation.status = 'approved'
+    reservation.admin_username = admin_username
+    reservation.assigned_devices = json.dumps(assigned_devices, ensure_ascii=False)
+    if admin_remarks:
+        reservation.admin_remarks = admin_remarks
+    reservation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(reservation)
+    return reservation
+
+
+def fulfill_reservation(db: Session, reservation_id: int, admin_username: str):
+    """执行出库：修改库存设备属性 + 创建借出记录"""
+    import json
+    from models import Reservation, Inventory, BorrowRecord
+
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation:
+        raise ValueError("申请不存在")
+    if reservation.status not in ('approved',):
+        raise ValueError(f"申请状态为 {reservation.status}，无法执行出库")
+
+    device_ids = json.loads(reservation.assigned_devices or '[]')
+    if not device_ids:
+        raise ValueError("未分配设备号")
+
+    fulfilled = []
+    failed = []
+    for did in device_ids:
+        device = db.query(Inventory).filter(Inventory.device_id == did).first()
+        if not device:
+            failed.append(f"{did}(不存在)")
+            continue
+
+        # 更新设备为组织售卖
+        device.device_attribute = '组织售卖'
+        device.owner = reservation.client_name or ''
+        device.sales_person = reservation.sales_person or ''
+        device.delivery_date = date.today()
+        device.updated_at = datetime.utcnow()
+
+        # 创建出库记录
+        borrow = BorrowRecord(
+            device_id=did,
+            borrower=reservation.sales_person or reservation.applicant,
+            expected_return_date=reservation.required_date,
+            purpose=f"组织售卖出库: {reservation.purpose or ''}",
+            status='borrowed',
+            remarks=f"预约出库, 甲方: {reservation.client_name or ''}"
+        )
+        db.add(borrow)
+        _log_operation(db, admin_username, "fulfill_reservation", did,
+                       {"reservation_id": reservation_id, "client": reservation.client_name})
+        fulfilled.append(did)
+
+    reservation.status = 'fulfilled'
+    reservation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(reservation)
+    return {"fulfilled": fulfilled, "failed": failed, "reservation": reservation}
+
+
+def reject_reservation(db: Session, reservation_id: int, admin_username: str,
+                       admin_remarks: str = None):
+    from models import Reservation
+    reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not reservation:
+        raise ValueError("申请不存在")
+    if reservation.status != 'pending':
+        raise ValueError(f"申请状态为 {reservation.status}，无法驳回")
+
+    reservation.status = 'rejected'
+    reservation.admin_username = admin_username
+    if admin_remarks:
+        reservation.admin_remarks = admin_remarks
+    reservation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(reservation)
+    return reservation

@@ -193,86 +193,21 @@ export default {
         if (response.error) {
           addMessage('ai', 'text', `抱歉，出现错误：${response.error}`);
         } else if (response.success && response.reply) {
-          // 新版 Agent: 直接返回结果，无需确认
           addMessage('ai', 'text', response.reply);
           // 操作成功触发数据刷新
           window.dispatchEvent(new CustomEvent('ai-data-changed'));
         } else if (response.reply) {
           addMessage('ai', 'text', response.reply);
+          window.dispatchEvent(new CustomEvent('ai-data-changed'));
         } else {
           addMessage('ai', 'text', '操作完成');
+          window.dispatchEvent(new CustomEvent('ai-data-changed'));
         }
       } catch (error) {
         console.error('AI对话失败:', error);
         addMessage('ai', 'text', `处理失败: ${error.message || '未知错误'}`);
       } finally {
         sending.value = false;
-      }
-    };
-
-    // 显示操作确认对话框
-    const showActionConfirm = (action, params, aiReply) => {
-      const actionNames = {
-        'create_inventory': '添加设备',
-        'batch_create_inventory': '批量添加设备',
-        'batch_create_inventory_range': '批量添加范围设备',
-        'update_inventory': '更新设备',
-        'delete_inventory': '删除设备',
-        'create_borrow': '借出设备',
-        'return_borrow': '归还设备',
-        'sell_device': '销售出库',
-        'smart_assign_device': '智能设备分配',
-        'update_iot_card': '更新IoT卡状态'
-      };
-      
-      const actionName = actionNames[action] || action;
-      
-      ElMessageBox.confirm(
-        `AI建议执行以下操作：\n\n${aiReply}\n\n是否确认执行"${actionName}"操作？`,
-        '确认操作',
-        {
-          confirmButtonText: '确认执行',
-          cancelButtonText: '取消',
-          type: 'warning',
-          distinguishCancelAndClose: true
-        }
-      ).then(async () => {
-        // 用户确认，执行操作
-        await executeAiAction(action, params);
-      }).catch((action) => {
-        if (action === 'cancel') {
-          addMessage('ai', 'text', '❌ 操作已取消');
-        }
-      });
-    };
-
-    // 执行AI生成的操作
-    const executeAiAction = async (action, params) => {
-      try {
-        // 找到最后一条用户消息用于日志记录
-        const lastUserMsg = [...messages.value].reverse().find(m => m.sender === 'user');
-        const result = await aiAPI.executeAction({
-          action,
-          params,
-          user_input: lastUserMsg?.content || ''
-        });
-
-        if (result.success) {
-          addMessage('ai', 'text', result.message || '✅ 操作成功');
-          ElMessage.success(result.message || '操作成功');
-        } else if (result.needs_return_date) {
-          addMessage('ai', 'text', `⏳ ${result.message || '请提供归还日期'}`);
-          ElMessage.warning('请补充归还日期信息');
-        } else {
-          const errDetail = result.detail || result.message || '未知错误';
-          addMessage('ai', 'text', `❌ 操作失败: ${errDetail}`);
-          ElMessage.error(errDetail);
-        }
-      } catch (error) {
-        console.error('执行操作失败:', error);
-        const errMsg = error.response?.data?.detail || error.message || '未知错误';
-        addMessage('ai', 'text', `❌ 执行失败: ${errMsg}`);
-        ElMessage.error('执行失败');
       }
     };
 
@@ -285,7 +220,7 @@ export default {
           cancelButtonText: '取消',
           type: 'warning',
         }
-      ).then(() => {
+      ).then(async () => {
         messages.value = [
           {
             sender: 'ai',
@@ -295,6 +230,8 @@ export default {
           }
         ];
         saveMessages();
+        // 同步清空后端对话历史
+        try { await aiAPI.clearHistory(); } catch (e) { /* 忽略 */ }
         ElMessage.success('聊天记录已清空');
       }).catch(() => {
         // 用户取消
@@ -314,9 +251,7 @@ export default {
       quickSuggestions,
       sendMessage,
       clearChat,
-      useSuggestion,
-      showActionConfirm,
-      executeAiAction
+      useSuggestion
     };
   }
 };

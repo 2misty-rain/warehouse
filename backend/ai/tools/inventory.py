@@ -98,8 +98,42 @@ def update_inventory(db, device_id, **kwargs):
 
 
 @register(
+    name="reclaim_device",
+    description="设备回收/退库。将设备回收为现有库存状态，清除所有分配信息（归属人、领用人、销售、备注、补充信息、交付日期）。当用户说'回收/退库/回收为库存/清除信息回库/归还库存'时使用。这不是删除，设备记录保留在数据库中。支持多台设备同时回收。",
+    parameters={
+        "device_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "要回收的设备号列表",
+            "required": True
+        }
+    }
+)
+def reclaim_device(db, device_ids):
+    from models import Inventory
+    results = []
+    for device_id in device_ids:
+        device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
+        if not device:
+            results.append({"device_id": device_id, "status": "失败", "reason": "设备不存在"})
+            continue
+        device.device_attribute = "现有库存"
+        device.owner = ""
+        device.borrower = None
+        device.sales_person = ""
+        device.remarks = ""
+        device.supplementary_info = ""
+        device.delivery_date = None
+        results.append({"device_id": device_id, "status": "成功"})
+    db.commit()
+    ok = [r for r in results if r["status"] == "成功"]
+    fail = [r for r in results if r["status"] != "成功"]
+    return {"success": True, "message": f"已回收 {len(ok)} 台设备为库存" + (f"，失败 {len(fail)} 台" if fail else ""), "ok": ok, "fail": fail}
+
+
+@register(
     name="delete_inventory",
-    description="删除设备。不可恢复，谨慎使用。",
+    description="永久删除设备记录（从数据库移除）。注意：这不是回收/退库操作。回收设备到库存请用 reclaim_device。不可恢复，谨慎使用。",
     parameters={
         "device_id": {"type": "string", "description": "设备号", "required": True}
     }
