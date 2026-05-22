@@ -1,13 +1,12 @@
 """
-LangChain Agent 工厂
+LangGraph Agent - ReAct 模式
 每请求创建新的 Agent（因为 db session 唯一）
 """
 import logging
 from sqlalchemy.orm import Session
 from langchain_community.chat_models.tongyi import ChatTongyi
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain.memory import ConversationBufferWindowMemory
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, AIMessage
 
 from ai_settings import ai_settings
 from .prompts import build_system_prompt, build_system_context
@@ -35,48 +34,53 @@ def run(user_input: str, db: Session, user_id: str = "default") -> dict:
         # 2. 获取 db 绑定的工具
         tools = get_all_tools(db)
 
-        # 3. 构建 Prompt
-        prompt_text = build_system_prompt(db)  # 动态生成日期
-        system_ctx = build_system_context(db)  # 仅告警，不含库存数字
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", prompt_text),
-            ("system", f"【待处理事项: {system_ctx}】"),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("system", "⚠️ 上述仅是待处理告警，不是库存全貌。你必须调用 get_inventory_overview 或 query_inventory 工具查询实时数据库后才能回答。禁止凭任何上下文中的数字回答。"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-
-        # 4. 创建 Agent
-        agent = create_tool_calling_agent(llm, tools, prompt)
-
-        # 5. 创建 Executor + Memory + Callbacks
-        chat_history = create_memory(user_id, db)  # BaseChatMessageHistory
-        memory = ConversationBufferWindowMemory(
-            chat_memory=chat_history,
-            k=6,
-            return_messages=True,
-            memory_key="chat_history",
+        # 3. 构建系统 Prompt
+        prompt_text = build_system_prompt(db)
+        system_ctx = build_system_context(db)
+        system_prompt = (
+            f"{prompt_text}\n\n"
+            f"【待处理事项: {system_ctx}】\n\n"
+            "⚠️ 上述仅是待处理告警，不是库存全貌。你必须调用 get_inventory_overview "
+            "或 query_inventory 工具查询实时数据库后才能回答。禁止凭任何上下文中的数字回答。"
         )
-        executor = AgentExecutor(
-            agent=agent,
+
+        # 4. 加载对话历史
+        chat_history = create_memory(user_id, db)
+        history_messages = list(chat_history.messages)
+
+        # 5. 创建 ReAct Agent
+        agent = create_react_agent(
+            model=llm,
             tools=tools,
-            memory=memory,
-            max_iterations=MAX_ITERATIONS,
-            verbose=True,
-            handle_parsing_errors=True,
-            return_intermediate_steps=True,
-            callbacks=[LoggingCallbackHandler()],
+            prompt=system_prompt,
         )
 
-        # 6. 执行
-        result = executor.invoke({"input": user_input})
-        output = result.get("output", "")
+        # 6. 执行（历史消息 + 当前用户输入）
+        input_messages = history_messages + [HumanMessage(content=user_input)]
+        result = agent.invoke(
+            {"messages": input_messages},
+            config={
+                "recursion_limit": MAX_ITERATIONS * 2 + 1,
+                "callbacks": [LoggingCallbackHandler()],
+            },
+        )
+
+        # 7. 提取最终输出
+        messages = result.get("messages", [])
+        output = ""
+        if messages:
+            last_msg = messages[-1]
+            output = last_msg.content if hasattr(last_msg, 'content') else ""
+
+        # 8. 持久化本轮对话
+        chat_history.add_message(HumanMessage(content=user_input))
+        if output:
+            chat_history.add_message(AIMessage(content=output))
 
         # 日志记录工具调用情况
-        steps = result.get("intermediate_steps", [])
-        tool_calls_made = [s[0].tool for s in steps if hasattr(s[0], 'tool')]
-        logger.info(f"Agent 完成: {len(output)} chars, {len(tool_calls_made)} tool calls: {tool_calls_made}")
+        tool_messages = [m for m in messages if hasattr(m, 'tool_calls') and m.tool_calls]
+        tool_call_count = sum(len(getattr(m, 'tool_calls', [])) for m in tool_messages)
+        logger.info(f"Agent 完成: {len(output)} chars, {tool_call_count} tool calls")
 
         if not output:
             return {"success": False, "reply": "AI 未生成有效回复，请重试。"}
