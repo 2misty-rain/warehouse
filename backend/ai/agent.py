@@ -3,6 +3,7 @@ LangGraph Agent - ReAct 模式
 每请求创建新的 Agent（因为 db session 唯一）
 """
 import logging
+from functools import partial
 from sqlalchemy.orm import Session
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langgraph.prebuilt import create_react_agent
@@ -18,6 +19,17 @@ logger = logging.getLogger(__name__)
 MAX_ITERATIONS = 8
 
 
+def _patch_tool_func(tool):
+    """langgraph 不认 functools.partial，包一层正常函数让 inspect 能工作"""
+    if not isinstance(tool.func, partial):
+        return
+    pf = tool.func
+    def wrapper(*args, **kwargs):
+        return pf(*args, **kwargs)
+    wrapper.__name__ = pf.func.__name__
+    tool.func = wrapper
+
+
 def run(user_input: str, db: Session, user_id: str = "default") -> dict:
     """执行一次 AI 对话，返回 {"success": bool, "reply": str}"""
 
@@ -31,8 +43,10 @@ def run(user_input: str, db: Session, user_id: str = "default") -> dict:
             streaming=False,
         )
 
-        # 2. 获取 db 绑定的工具
+        # 2. 获取 db 绑定的工具（修复 partial 避免 langgraph inspect 报错）
         tools = get_all_tools(db)
+        for t in tools:
+            _patch_tool_func(t)
 
         # 3. 构建系统 Prompt
         prompt_text = build_system_prompt(db)
