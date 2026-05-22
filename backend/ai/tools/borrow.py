@@ -1,102 +1,118 @@
-"""借用管理工具"""
-from ..tool_registry import register
-from schemas import BorrowRecordCreate, BorrowRecordReturn
-from crud import create_borrow_record, return_device as crud_return
+"""借用管理工具: 借出、归还、逾期查询"""
+from functools import partial
+from typing import Optional
+from pydantic import BaseModel, Field
+from langchain_core.tools import StructuredTool
+from datetime import date
 
 
-@register(
-    name="create_borrow",
-    description="借出设备给某人。设备暂时给某人使用，还会归还。",
-    parameters={
-        "device_id": {"type": "string", "description": "设备号", "required": True},
-        "borrower": {"type": "string", "description": "借用人", "required": True},
-        "expected_return_date": {"type": "string", "description": "预计归还日期 YYYY-MM-DD", "required": False},
-        "purpose": {"type": "string", "description": "借用目的", "required": False},
-        "remarks": {"type": "string", "description": "备注", "required": False}
-    }
-)
-def create_borrow(db, device_id, borrower, expected_return_date=None, purpose=None, remarks=None):
-    from models import Inventory
+class CreateBorrowInput(BaseModel):
+    device_id: str = Field(..., description="设备号")
+    borrower: str = Field(..., description="借用人姓名")
+    expected_return_date: Optional[str] = Field(None, description="预计归还日期 YYYY-MM-DD")
+    purpose: Optional[str] = Field(None, description="借用目的(试用/演示/测试等)")
+    remarks: Optional[str] = Field(None, description="备注")
+
+
+class ReturnBorrowInput(BaseModel):
+    device_id: str = Field(..., description="设备号")
+    condition_on_return: Optional[str] = Field(None, description="归还时设备状态")
+    remarks: Optional[str] = Field(None, description="归还备注")
+
+
+class QueryOverdueInput(BaseModel):
+    pass
+
+
+def _create_borrow(db, device_id: str, borrower: str, expected_return_date=None,
+                   purpose=None, remarks=None):
+    from models import Inventory, BorrowRecord
+    from crud import create_borrow_record
+
     device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
     if not device:
         return {"success": False, "message": f"设备 {device_id} 不存在"}
     if device.borrower:
-        return {"success": False, "message": f"设备 {device_id} 已被 {device.borrower} 领用，请先归还"}
+        return {"success": False, "message": f"设备 {device_id} 已被 {device.borrower} 借用中"}
 
-    data = {"device_id": device_id, "borrower": borrower, "purpose": purpose or "", "remarks": remarks or ""}
-    if expected_return_date:
-        from datetime import datetime
-        try:
-            data["expected_return_date"] = datetime.strptime(expected_return_date, '%Y-%m-%d').date()
-        except ValueError:
-            pass
-
-    borrow_data = BorrowRecordCreate(**data)
-    result = create_borrow_record(db, borrow_data)
+    record = create_borrow_record(db, BorrowRecord(
+        device_id=device_id, borrower=borrower,
+        expected_return_date=expected_return_date,
+        purpose=purpose, remarks=remarks
+    ))
     device.borrower = borrower
-    if device.device_attribute == '现有库存' and purpose and '试用' in purpose:
-        device.device_attribute = '商机试用'
+    if device.device_attribute == '现有库存' and purpose:
+        p = purpose.lower()
+        if '试用' in p: device.device_attribute = '商机试用'
+        elif '演示' in p or '展示' in p: device.device_attribute = '产品演示'
+        elif '测试' in p or '开发' in p or '技术' in p: device.device_attribute = '技术开发/测试'
+        else: device.device_attribute = '内部试用'
     db.commit()
-    return {"success": True, "message": f"已借出 {device_id} → {borrower}"}
+    return {"success": True, "message": f"已借出 {device_id} → {borrower}", "borrow_id": record.id}
 
 
-@register(
-    name="return_borrow",
-    description="归还已借出的设备。通过设备号归还。",
-    parameters={
-        "device_id": {"type": "string", "description": "设备号", "required": True},
-        "condition_on_return": {"type": "string", "description": "归还时设备状态", "required": False},
-        "remarks": {"type": "string", "description": "备注", "required": False}
-    }
-)
-def return_borrow(db, device_id, condition_on_return=None, remarks=None):
-    from models import Inventory, BorrowRecord
-    active_record = db.query(BorrowRecord).filter(
+def _return_borrow(db, device_id: str, condition_on_return=None, remarks=None):
+    from models import BorrowRecord, Inventory
+
+    record = db.query(BorrowRecord).filter(
         BorrowRecord.device_id == device_id, BorrowRecord.status == 'borrowed'
     ).first()
-    if not active_record:
-        return {"success": False, "message": f"设备 {device_id} 没有活跃的借用记录"}
+    if not record:
+        return {"success": False, "message": f"设备 {device_id} 无活跃借用记录"}
 
-    return_data = BorrowRecordReturn(
-        condition_on_return=condition_on_return or '', remarks=remarks or '')
-    crud_return(db, active_record.id, return_data)
+    record.status = 'returned'
+    record.actual_return_date = date.today()
+    if condition_on_return: record.condition_on_return = condition_on_return
+    if remarks: record.remarks = f"{record.remarks or ''}\n归还备注: {remarks}"
 
     device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
     if device:
         device.borrower = None
-        if device.device_attribute in ('商机试用', '内部试用', '产品演示'):
+        if device.device_attribute in ('商机试用', '内部试用', '产品演示', '技术开发/测试', '特殊占用'):
             device.device_attribute = '现有库存'
-        db.commit()
+            device.owner = None
+            device.sales_person = None
+    db.commit()
     return {"success": True, "message": f"已归还 {device_id}"}
 
 
-@register(
-    name="query_overdue",
-    description="查询所有逾期未还的设备。",
-    parameters={}
-)
-def query_overdue(db):
+def _query_overdue(db):
     from models import BorrowRecord, Inventory
-    from datetime import date
     today = date.today()
-    records = db.query(BorrowRecord).filter(
+    overdue = db.query(BorrowRecord).filter(
         BorrowRecord.status.in_(['borrowed', 'overdue']),
         BorrowRecord.expected_return_date < today
-    ).order_by(BorrowRecord.expected_return_date.asc()).limit(20).all()
-
-    if not records:
-        return {"success": True, "overdue_count": 0, "items": [], "message": "没有逾期设备"}
-
+    ).all()
     items = []
-    for r in records:
-        overdue_days = (today - r.expected_return_date).days
+    for r in overdue[:20]:
         device = db.query(Inventory).filter(Inventory.device_id == r.device_id).first()
         items.append({
-            "device_id": r.device_id, "borrower": r.borrower,
-            "expected_return_date": r.expected_return_date.strftime("%Y-%m-%d"),
-            "overdue_days": overdue_days,
-            "version": device.version if device else "-",
-            "type": device.type if device else "-"
+            "borrow_id": r.id, "device_id": r.device_id,
+            "borrower": r.borrower, "expected_return_date": str(r.expected_return_date),
+            "overdue_days": (today - r.expected_return_date).days,
+            "device_attribute": device.device_attribute if device else "-"
         })
+    return {"overdue_count": len(overdue), "items": items, "success": True}
 
-    return {"success": True, "overdue_count": len(records), "items": items}
+
+def make_borrow_tools(db):
+    return [
+        StructuredTool.from_function(
+            func=partial(_create_borrow, db),
+            name="create_borrow",
+            description="借出设备给某人。设备暂时给某人使用，还会归还。",
+            args_schema=CreateBorrowInput,
+        ),
+        StructuredTool.from_function(
+            func=partial(_return_borrow, db),
+            name="return_borrow",
+            description="归还已借出的设备。通过设备号归还。",
+            args_schema=ReturnBorrowInput,
+        ),
+        StructuredTool.from_function(
+            func=partial(_query_overdue, db),
+            name="query_overdue",
+            description="查询所有逾期未还的设备列表。",
+            args_schema=QueryOverdueInput,
+        ),
+    ]

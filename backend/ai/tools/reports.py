@@ -1,30 +1,29 @@
 """报表工具: 周报、库存概览"""
-from ..tool_registry import register
+from functools import partial
+from pydantic import BaseModel
+from langchain_core.tools import StructuredTool
 
 
-@register(
-    name="get_weekly_report",
-    description="获取本周出库统计报告。",
-    parameters={}
-)
-def get_weekly_report(db):
+class NoInput(BaseModel):
+    pass
+
+
+def _get_weekly_report(db):
     from crud import get_weekly_report as crud_report
     return crud_report(db)
 
 
-@register(
-    name="get_inventory_overview",
-    description="库存整体概览。总数、借用率、各属性分布、型号分布、预警信息。用户问'库存情况/库存概览/盘点'时使用。",
-    parameters={}
-)
-def get_inventory_overview(db):
+def _get_inventory_overview(db):
     from models import Inventory, BorrowRecord
     from sqlalchemy import func
     from datetime import date
 
     total = db.query(Inventory).count()
-    available = db.query(Inventory).filter(Inventory.borrower == None).count()
-    borrowed = total - available
+    available = db.query(Inventory).filter(
+        Inventory.borrower == None,
+        ~Inventory.device_attribute.in_(['已售出', '组织售卖'])
+    ).count()
+    borrowed = db.query(Inventory).filter(Inventory.borrower != None).count()
     borrow_rate = round((borrowed / total * 100), 1) if total > 0 else 0
 
     wifi_c = db.query(Inventory).filter(Inventory.version == "WiFi").count()
@@ -37,6 +36,9 @@ def get_inventory_overview(db):
         BorrowRecord.status.in_(['borrowed', 'overdue']),
         BorrowRecord.expected_return_date < today
     ).count()
+    sold_count = db.query(Inventory).filter(
+        Inventory.device_attribute.in_(['已售出', '组织售卖'])
+    ).count()
 
     attr_dist = db.query(Inventory.device_attribute, func.count(Inventory.id)).group_by(
         Inventory.device_attribute).all()
@@ -46,25 +48,40 @@ def get_inventory_overview(db):
         Inventory.version == '4G', Inventory.iot_card_status == '开卡'
     ).count()
 
+    # 返回每台设备的详细信息
     all_devices = db.query(Inventory).order_by(Inventory.device_id).all()
     devices = [{
-        "device_id": d.device_id,
-        "version": d.version or "-",
-        "type": d.type or "-",
-        "packaging": d.packaging or "-",
+        "device_id": d.device_id, "version": d.version or "-",
+        "type": d.type or "-", "packaging": d.packaging or "-",
         "device_attribute": d.device_attribute or "未分类",
-        "owner": d.owner or "-",
-        "borrower": d.borrower or "-",
-        "iot_card_status": d.iot_card_status or "-"
+        "owner": d.owner or "-", "borrower": d.borrower or "-",
+        "sales_person": d.sales_person or "-", "iot_card_status": d.iot_card_status or "-"
     } for d in all_devices]
 
     return {
         "success": True,
         "total": total, "available": available, "borrowed": borrowed,
-        "borrow_rate": borrow_rate, "overdue_count": overdue_c,
+        "sold": sold_count, "borrow_rate": borrow_rate,
         "wifi_count": wifi_c, "g4_count": g4_c,
         "sleep_count": sleep_c, "fall_count": fall_c,
+        "overdue_count": overdue_c, "active_iot_cards": active_iot,
         "attribute_distribution": attr_map,
-        "active_iot_cards": active_iot,
         "devices": devices
     }
+
+
+def make_report_tools(db):
+    return [
+        StructuredTool.from_function(
+            func=partial(_get_weekly_report, db),
+            name="get_weekly_report",
+            description="获取本周出库统计报告。",
+            args_schema=NoInput,
+        ),
+        StructuredTool.from_function(
+            func=partial(_get_inventory_overview, db),
+            name="get_inventory_overview",
+            description="库存整体概览。返回总数、借用率、各属性分布、版本分布、每台设备详情。用户问'库存情况/库存概览/盘点'时使用。",
+            args_schema=NoInput,
+        ),
+    ]
