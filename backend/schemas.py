@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -8,7 +8,7 @@ from datetime import date, datetime
 class InventoryBase(BaseModel):
     serial_number: Optional[str] = None
     version: Optional[str] = None
-    device_id: str
+    device_id: str = Field(..., min_length=12, max_length=12, description="设备号(3字母+9数字=12位)")
     type: Optional[str] = None
     packaging: Optional[str] = None
     device_attribute: Optional[str] = None
@@ -225,7 +225,7 @@ class OperationLogResponse(BaseModel):
 # ========== Reservation Schemas ==========
 
 class ReservationCreate(BaseModel):
-    quantity: int
+    quantity: int = Field(..., ge=1, le=1000, description="需求数量(1-1000)")
     version_req: Optional[str] = None
     packaging_req: Optional[str] = None
     client_name: Optional[str] = None

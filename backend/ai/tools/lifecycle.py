@@ -2,6 +2,7 @@
 from functools import partial
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
+from ai.tools.device_attr import norm_attr
 
 
 class DeviceLifecycleInput(BaseModel):
@@ -10,7 +11,12 @@ class DeviceLifecycleInput(BaseModel):
 
 def _get_device_lifecycle(db, device_id: str):
     from crud import get_device_timeline
-    return get_device_timeline(db, device_id)
+    result = get_device_timeline(db, device_id)
+    # 映射事件描述中的"商机交付"→"已售出"
+    for event in result.get("events", []):
+        if "商机交付" in event.get("description", ""):
+            event["description"] = event["description"].replace("商机交付", "已售出")
+    return result
 
 
 def make_lifecycle_tools(db):

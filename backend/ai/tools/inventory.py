@@ -5,12 +5,13 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 from schemas import InventoryCreate, InventoryUpdate
 from crud import create_inventory as crud_create, update_inventory as crud_update, delete_inventory as crud_delete
+from ai.tools.device_attr import norm_attr
 
 
 # ---- Pydantic Input Models ----
 
 class QueryInventoryInput(BaseModel):
-    device_attribute: Optional[str] = Field(None, description="设备属性筛选: 现有库存/组织售卖/商机试用/内部试用/产品演示/技术开发测试/特殊占用/异常处理")
+    device_attribute: Optional[str] = Field(None, description="设备属性筛选: 现有库存/已售出/商机试用/内部试用/产品演示/技术开发测试/特殊占用/异常处理")
     version: Optional[str] = Field(None, description="版本筛选: WiFi/4G")
     type: Optional[str] = Field(None, description="类型筛选: 睡眠/跌倒")
     owner: Optional[str] = Field(None, description="归属人(甲方)")
@@ -20,7 +21,7 @@ class QueryInventoryInput(BaseModel):
 
 
 class CreateInventoryInput(BaseModel):
-    device_id: str = Field(..., description="设备号(必填)")
+    device_id: str = Field(..., min_length=12, max_length=12, description="设备号(必填, 3字母+9数字=12位)")
     serial_number: Optional[str] = Field(None, description="序号")
     version: Optional[str] = Field(None, description="版本: WiFi/4G")
     type: Optional[str] = Field(None, description="类型: 睡眠/跌倒")
@@ -55,7 +56,10 @@ def _query_inventory(db, device_attribute=None, version=None, type=None, owner=N
                      borrower=None, iot_card_status=None, keyword=None):
     from models import Inventory
     query = db.query(Inventory)
-    if device_attribute: query = query.filter(Inventory.device_attribute == device_attribute)
+    if device_attribute:
+        # 反向映射：AI 传入"已售出"时，DB 查询"商机交付"
+        attr_filter = "商机交付" if device_attribute == "已售出" else device_attribute
+        query = query.filter(Inventory.device_attribute == attr_filter)
     if version: query = query.filter(Inventory.version == version)
     if type: query = query.filter(Inventory.type == type)
     if owner: query = query.filter(Inventory.owner.like(f"%{owner}%"))
@@ -63,11 +67,13 @@ def _query_inventory(db, device_attribute=None, version=None, type=None, owner=N
     if iot_card_status: query = query.filter(Inventory.iot_card_status == iot_card_status)
     if keyword:
         kw = f"%{keyword}%"
-        query = query.filter((Inventory.device_id.like(kw)) | (Inventory.serial_number.like(kw)))
+        query = query.filter(
+            (Inventory.device_id.like(kw)) | (Inventory.serial_number.like(kw)) | (Inventory.owner.like(kw))
+        )
     total = query.count()
     items = query.limit(50).all()
     results = [{"device_id": d.device_id, "version": d.version or "-", "type": d.type or "-",
-                "packaging": d.packaging or "-", "device_attribute": d.device_attribute or "未分类",
+                "packaging": d.packaging or "-", "device_attribute": norm_attr(d.device_attribute),
                 "owner": d.owner or "-", "borrower": d.borrower or "-",
                 "sales_person": d.sales_person or "-", "iot_card_status": d.iot_card_status or "-",
                 "remarks": d.remarks or "", "delivery_date": str(d.delivery_date) if d.delivery_date else "-"}
@@ -77,9 +83,19 @@ def _query_inventory(db, device_attribute=None, version=None, type=None, owner=N
 
 def _create_inventory(db, device_id: str, serial_number=None, version=None, type=None,
                       packaging=None, device_attribute="现有库存", owner=None, remarks=None):
-    data = {"device_id": device_id, "serial_number": serial_number or device_id,
+    from models import Inventory
+    existing = db.query(Inventory).filter(Inventory.device_id == device_id).first()
+    if existing:
+        return {"success": False, "message": f"设备号 {device_id} 已存在"}
+    sn = serial_number or device_id
+    existing_serial = db.query(Inventory).filter(Inventory.serial_number == sn).first()
+    if existing_serial:
+        return {"success": False, "message": f"序号 {sn} 已存在"}
+
+    data = {"device_id": device_id, "serial_number": sn,
             "version": version or "", "type": type or "", "packaging": packaging or "",
-            "device_attribute": device_attribute or "现有库存", "owner": owner or "", "remarks": remarks or ""}
+            "device_attribute": "商机交付" if (device_attribute or "现有库存") == "已售出" else (device_attribute or "现有库存"),
+            "owner": owner or "", "remarks": remarks or ""}
     inv = InventoryCreate(**data)
     result = crud_create(db, inv)
     db.commit()
@@ -94,6 +110,9 @@ def _update_inventory(db, device_id: str, **kwargs):
     clean = {k: v for k, v in kwargs.items() if v is not None and k != 'device_id'}
     if not clean:
         return {"success": False, "message": "没有要更新的字段"}
+    # 反向映射：AI 传入"已售出"时，DB 存储"商机交付"
+    if clean.get("device_attribute") == "已售出":
+        clean["device_attribute"] = "商机交付"
     update_data = InventoryUpdate(**clean)
     crud_update(db, device_id=device_id, inventory_update=update_data)
     db.commit()
@@ -101,19 +120,29 @@ def _update_inventory(db, device_id: str, **kwargs):
 
 
 def _reclaim_device(db, device_ids: list):
-    from models import Inventory
+    from models import Inventory, BorrowRecord
+    from datetime import date
     results = []
     for device_id in device_ids:
         device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
         if not device:
             results.append({"device_id": device_id, "status": "失败", "reason": "设备不存在"})
             continue
+        # 终止活跃借用记录
+        active = db.query(BorrowRecord).filter(
+            BorrowRecord.device_id == device_id,
+            BorrowRecord.status.in_(['borrowed', 'overdue'])
+        ).all()
+        for b in active:
+            b.status = 'terminated'
+            b.actual_return_date = date.today()
+            b.remarks = f"{b.remarks or ''}\n(因回收终止)"
         device.device_attribute = "现有库存"
-        device.owner = ""
+        device.owner = None
         device.borrower = None
-        device.sales_person = ""
+        device.sales_person = None
         device.remarks = ""
-        device.supplementary_info = ""
+        device.supplementary_info = None
         device.delivery_date = None
         results.append({"device_id": device_id, "status": "成功"})
     db.commit()

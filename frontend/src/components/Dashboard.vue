@@ -75,7 +75,8 @@
 <script>
 import * as echarts from 'echarts';
 import { onMounted, onUnmounted, ref } from 'vue';
-import { dashboardAPI, inventoryAPI, reservationAPI } from '../api';
+import { dashboardAPI, reservationAPI } from '../api';
+import { ElMessage } from 'element-plus';
 import { Warning, CircleCloseFilled, Clock, Refresh } from '@element-plus/icons-vue';
 
 export default {
@@ -123,26 +124,14 @@ export default {
           } catch {}
         }
 
-        // 2. 获取所有设备用于动态图表
-        const invResp = await inventoryAPI.getAll({ skip: 0, limit: 1000 });
-        const devices = invResp.items || invResp;
-
-        // 动态统计类型和版本
-        const typeCount = {};
-        const versionCount = {};
-        devices.forEach(d => {
-          const t = d.type || '未分类';
-          typeCount[t] = (typeCount[t] || 0) + 1;
-          const v = d.version || '未分类';
-          versionCount[v] = (versionCount[v] || 0) + 1;
-        });
-
-        updateTypeChart(typeCount);
-        updateVersionChart(versionCount);
+        // 2. 直接用后端统计渲染图表（避免拉全量设备）
+        updateTypeChart({ '睡眠': data.sleep_devices, '跌倒': data.fall_devices });
+        updateVersionChart({ 'WiFi': data.wifi_devices, '4G': data.g4_devices });
 
         lastUpdate.value = new Date().toLocaleString();
       } catch (e) {
         console.error('加载数据失败:', e);
+        ElMessage.error('加载仪表盘数据失败');
       } finally {
         refreshing.value = false;
       }
@@ -214,7 +203,7 @@ export default {
     };
 
     let refreshTimer = null;
-    const AUTO_REFRESH_INTERVAL = 30000; // 30秒自动刷新
+    const AUTO_REFRESH_INTERVAL = 60000; // 60秒自动刷新
 
     onMounted(() => {
       typeChartInstance = echarts.init(typeChart.value);

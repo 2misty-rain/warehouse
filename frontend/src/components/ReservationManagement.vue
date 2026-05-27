@@ -193,7 +193,7 @@ export default {
       try {
         const res = await inventoryAPI.getAll({ skip: 0, limit: 1000 });
         const items = res.items || res;
-        availableDevices.value = items.filter(d => !d.borrower && d.device_attribute !== '组织售卖');
+        availableDevices.value = items.filter(d => !d.borrower && d.device_attribute !== '商机交付');
       } catch {}
     };
 

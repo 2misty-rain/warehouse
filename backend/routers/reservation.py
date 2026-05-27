@@ -10,7 +10,7 @@ from crud import (
     approve_reservation, fulfill_reservation, reject_reservation,
     get_pending_reservations_count
 )
-from auth import get_current_user, get_optional_user
+from auth import get_current_user
 
 router = APIRouter(prefix="/reservation", tags=["Reservation"])
 

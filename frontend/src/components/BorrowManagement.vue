@@ -197,7 +197,7 @@ export default {
         const map = {};
         devices.forEach(d => { map[d.device_id] = d; });
         deviceInfoMap.value = map;
-        availableDevices.value = devices.filter(d => !d.borrower);
+        availableDevices.value = devices.filter(d => d.device_attribute == '现有库存');
       } catch (error) { console.error('加载设备信息失败:', error); }
     };
 
@@ -234,8 +234,7 @@ export default {
         borrowForm.value = { device_id: '', borrower: '', expected_return_date: null, purpose: '', condition_on_borrow: '', remarks: '' };
         refreshAll();
       } catch (error) {
-        if (error.message) ElMessage.error(error.message);
-        else ElMessage.error('借出设备失败');
+        ElMessage.error(error.response?.data?.detail || '借出设备失败');
       }
     };
 
@@ -252,7 +251,7 @@ export default {
         showReturnDialogVisible.value = false;
         showOverdueDialog.value = false;
         refreshAll();
-      } catch (error) { ElMessage.error('归还设备失败'); }
+      } catch (error) { ElMessage.error(error.response?.data?.detail || '归还设备失败'); }
     };
 
     const batchReturn = async () => {

@@ -2,6 +2,7 @@
 from functools import partial
 from pydantic import BaseModel
 from langchain_core.tools import StructuredTool
+from ai.tools.device_attr import norm_attr
 
 
 class NoInput(BaseModel):
@@ -10,7 +11,12 @@ class NoInput(BaseModel):
 
 def _get_weekly_report(db):
     from crud import get_weekly_report as crud_report
-    return crud_report(db)
+    result = crud_report(db)
+    # 映射 by_attribute 中的"商机交付"→"已售出"
+    for item in result.get("by_attribute", []):
+        if item.get("name") == "商机交付":
+            item["name"] = "已售出"
+    return result
 
 
 def _get_inventory_overview(db):
@@ -21,7 +27,7 @@ def _get_inventory_overview(db):
     total = db.query(Inventory).count()
     available = db.query(Inventory).filter(
         Inventory.borrower == None,
-        ~Inventory.device_attribute.in_(['已售出', '组织售卖'])
+        Inventory.device_attribute != '商机交付'
     ).count()
     borrowed = db.query(Inventory).filter(Inventory.borrower != None).count()
     borrow_rate = round((borrowed / total * 100), 1) if total > 0 else 0
@@ -37,12 +43,17 @@ def _get_inventory_overview(db):
         BorrowRecord.expected_return_date < today
     ).count()
     sold_count = db.query(Inventory).filter(
-        Inventory.device_attribute.in_(['已售出', '组织售卖'])
+        Inventory.device_attribute == '商机交付'
     ).count()
 
     attr_dist = db.query(Inventory.device_attribute, func.count(Inventory.id)).group_by(
         Inventory.device_attribute).all()
-    attr_map = {a or "未分类": c for a, c in attr_dist}
+    attr_map = {}
+    for a, c in attr_dist:
+        key = a or "未分类"
+        if key == "商机交付":
+            key = "已售出"
+        attr_map[key] = c
 
     active_iot = db.query(Inventory).filter(
         Inventory.version == '4G', Inventory.iot_card_status == '开卡'
@@ -53,7 +64,7 @@ def _get_inventory_overview(db):
     devices = [{
         "device_id": d.device_id, "version": d.version or "-",
         "type": d.type or "-", "packaging": d.packaging or "-",
-        "device_attribute": d.device_attribute or "未分类",
+        "device_attribute": norm_attr(d.device_attribute),
         "owner": d.owner or "-", "borrower": d.borrower or "-",
         "sales_person": d.sales_person or "-", "iot_card_status": d.iot_card_status or "-"
     } for d in all_devices]
@@ -61,7 +72,7 @@ def _get_inventory_overview(db):
     return {
         "success": True,
         "total": total, "available": available, "borrowed": borrowed,
-        "sold": sold_count, "borrow_rate": borrow_rate,
+        "sold_count": sold_count, "borrow_rate": borrow_rate,
         "wifi_count": wifi_c, "g4_count": g4_c,
         "sleep_count": sleep_c, "fall_count": fall_c,
         "overdue_count": overdue_c, "active_iot_cards": active_iot,

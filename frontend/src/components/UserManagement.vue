@@ -138,13 +138,14 @@ export default {
 
     const toggleActive = async (row) => {
       try {
+        const newActive = !row.is_active;
         await ElMessageBox.confirm(
-          `确定要${row.is_active ? '禁用' : '启用'}用户 ${row.username} 吗？`,
-          `${row.is_active ? '禁用' : '启用'}用户`,
+          `确定要${newActive ? '禁用' : '启用'}用户 ${row.username} 吗？`,
+          `${newActive ? '禁用' : '启用'}用户`,
           { type: 'warning' }
         );
-        await authAPI.updateUser(row.id, { is_active: !row.is_active });
-        ElMessage.success(`用户已${row.is_active ? '禁用' : '启用'}`);
+        await authAPI.updateUser(row.id, { is_active: newActive });
+        ElMessage.success(`用户已${newActive ? '禁用' : '启用'}`);
         loadUsers();
       } catch (e) {
         if (e !== 'cancel') ElMessage.error(e.response?.data?.detail || '操作失败');

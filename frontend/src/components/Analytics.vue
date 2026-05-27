@@ -212,8 +212,8 @@ export default {
           const type = device.type || '未分类';
           typeCount[type] = (typeCount[type] || 0) + 1;
           
-          // 统计售卖（含已售出和组织售卖）
-          if (device.device_attribute === '组织售卖' || device.device_attribute === '已售出') {
+          // 统计售卖（含已售出和商机交付）
+          if (device.device_attribute === '商机交付' || device.device_attribute === '已售出') {
             soldCount++;
             const owner = device.owner || '未指定';
             if (!institutionData[owner]) {

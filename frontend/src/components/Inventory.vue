@@ -16,7 +16,7 @@
       
       <el-select v-model="filterAttribute" placeholder="设备属性" clearable style="width: 150px; margin-right: 10px;" @change="handleSearch">
         <el-option label="现有库存" value="现有库存"></el-option>
-        <el-option label="组织售卖" value="组织售卖"></el-option>
+        <el-option label="商机交付" value="商机交付"></el-option>
         <el-option label="商机试用" value="商机试用"></el-option>
         <el-option label="内部试用" value="内部试用"></el-option>
         <el-option label="产品演示" value="产品演示"></el-option>
@@ -78,7 +78,7 @@
     </div>
 
     <el-table
-      :data="filteredInventoryList"
+      :data="inventoryList"
       v-loading="loading"
       style="width: 100%"
       border
@@ -170,7 +170,7 @@
             <el-option label="特殊占用" value="特殊占用"></el-option>
             <el-option label="现有库存" value="现有库存"></el-option>
             <el-option label="异常处理" value="异常处理"></el-option>
-            <el-option label="组织售卖" value="组织售卖"></el-option>
+            <el-option label="商机交付" value="商机交付"></el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="归属人" prop="owner">
@@ -232,7 +232,7 @@
         <el-table-column label="属性" width="130">
           <template #default="{ row }">
             <el-select v-model="row.device_attribute" size="small">
-              <el-option label="现有库存" value="现有库存" /><el-option label="组织售卖" value="组织售卖" />
+              <el-option label="现有库存" value="现有库存" /><el-option label="商机交付" value="商机交付" />
               <el-option label="商机试用" value="商机试用" /><el-option label="产品演示" value="产品演示" />
             </el-select>
           </template>
@@ -357,7 +357,7 @@
             <el-option label="特殊占用" value="特殊占用"></el-option>
             <el-option label="现有库存" value="现有库存"></el-option>
             <el-option label="异常处理" value="异常处理"></el-option>
-            <el-option label="组织售卖" value="组织售卖"></el-option>
+            <el-option label="商机交付" value="商机交付"></el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="归属人">
@@ -438,7 +438,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted, reactive, computed } from 'vue';
+import { ref, onMounted, onUnmounted, reactive } from 'vue';
 import { inventoryAPI } from '../api';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Search, Upload, Download, UploadFilled } from '@element-plus/icons-vue';
@@ -512,16 +512,11 @@ export default {
     const filterDeliveryDateRange = ref(null); // 交付时间范围筛选
     const filterIoTCard = ref('');
     
-    // 直接使用后端返回的数据,不再前端筛选
-    const filteredInventoryList = computed(() => {
-      return inventoryList.value;
-    });
-    
     // 获取属性标签类型
     const getAttributeType = (attribute) => {
       const typeMap = {
         '现有库存': '',
-        '组织售卖': 'success',
+        '商机交付': 'success',
         '商机试用': 'warning',
         '内部试用': 'info',
         '产品演示': '',
@@ -603,7 +598,11 @@ export default {
     });
 
     const rules = {
-      device_id: [{ required: true, message: '请输入设备号', trigger: 'blur' }]
+      device_id: [
+        { required: true, message: '请输入设备号', trigger: 'blur' },
+        { min: 12, max: 12, message: '设备号必须为12位（3字母+9数字）', trigger: 'blur' },
+        { pattern: /^[A-Za-z]{3}\d{9}$/, message: '格式: 3位字母+9位数字, 如CAA241101356', trigger: 'blur' }
+      ]
     };
     
     const formRef = ref(null);
@@ -692,6 +691,8 @@ export default {
     };
 
     const submitForm = async () => {
+      const valid = await formRef.value.validate().catch(() => false);
+      if (!valid) return;
       try {
         if (editingItem.value) {
           // 更新设备
@@ -728,11 +729,16 @@ export default {
       loadInventory();
     };
 
-    // 下载导入模板
-    const downloadTemplate = () => {
-      const token = localStorage.getItem('access_token');
-      const url = `/api/inventory/import/template?token=${encodeURIComponent(token || '')}`;
-      window.open(url, '_blank');
+    // 下载导入模板（使用 axios blob 避免 token 泄露到 URL）
+    const downloadTemplate = async () => {
+      try {
+        const response = await inventoryAPI.downloadTemplate();
+        const blob = new Blob([response], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'inventory_import_template.csv';
+        a.click(); URL.revokeObjectURL(url);
+      } catch { ElMessage.error('下载模板失败'); }
     };
 
     // 多选
@@ -792,25 +798,31 @@ export default {
       }
     };
 
-    // 导出库存数据（带入当前筛选条件）
-    const exportInventory = () => {
-      const token = localStorage.getItem('access_token');
-      const params = new URLSearchParams();
-      params.set('token', token || '');
-      if (searchText.value) params.set('search', searchText.value);
-      if (filterAttribute.value) params.set('device_attribute', filterAttribute.value);
-      if (filterVersion.value) params.set('version', filterVersion.value);
-      if (filterType.value) params.set('type', filterType.value);
-      if (filterPackaging.value) params.set('packaging', filterPackaging.value);
-      if (filterOwner.value) params.set('owner', filterOwner.value);
-      if (filterIoTCard.value) params.set('iot_card_status', filterIoTCard.value);
-      if (filterDeliveryDateRange.value && filterDeliveryDateRange.value.length === 2) {
-        params.set('delivery_date_start', filterDeliveryDateRange.value[0]);
-        params.set('delivery_date_end', filterDeliveryDateRange.value[1]);
-      }
-      const url = `/api/inventory/export/stream?${params.toString()}`;
-      window.open(url, '_blank');
-      ElMessage.success('正在导出，请稍候...');
+    // 导出库存数据（带入当前筛选条件，使用 blob 避免 token 泄露）
+    const exportInventory = async () => {
+      try {
+        const params = {};
+        if (searchText.value) params.search = searchText.value;
+        if (filterAttribute.value) params.device_attribute = filterAttribute.value;
+        if (filterVersion.value) params.version = filterVersion.value;
+        if (filterType.value) params.type = filterType.value;
+        if (filterPackaging.value) params.packaging = filterPackaging.value;
+        if (filterOwner.value) params.owner = filterOwner.value;
+        if (filterIoTCard.value) params.iot_card_status = filterIoTCard.value;
+        if (filterDeliveryDateRange.value && filterDeliveryDateRange.value.length === 2) {
+          params.delivery_date_start = filterDeliveryDateRange.value[0];
+          params.delivery_date_end = filterDeliveryDateRange.value[1];
+        }
+        const response = await inventoryAPI.exportCSV(params);
+        const blob = new Blob([response], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const now = new Date();
+        a.href = url;
+        a.download = `inventory_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}.csv`;
+        a.click(); URL.revokeObjectURL(url);
+        ElMessage.success('导出完成');
+      } catch { ElMessage.error('导出失败'); }
     };
 
     // 处理文件选择
@@ -834,13 +846,13 @@ export default {
         const response = await inventoryAPI.importCSV(formData);
         importResult.value = response;
         
-        if (response.data.success_count > 0) {
-          ElMessage.success(`导入成功 ${response.data.success_count} 条记录`);
+        if (response.success_count > 0) {
+          ElMessage.success(`导入成功 ${response.success_count} 条记录`);
           loadInventory(); // 重新加载列表
         }
-        
-        if (response.data.error_count > 0) {
-          ElMessage.warning(`有 ${response.data.error_count} 条记录导入失败，请查看错误详情`);
+
+        if (response.error_count > 0) {
+          ElMessage.warning(`有 ${response.error_count} 条记录导入失败，请查看错误详情`);
         }
       } catch (error) {
         console.error('导入失败:', error);
@@ -872,7 +884,6 @@ export default {
 
     return {
       inventoryList,
-      filteredInventoryList,
       loading,
       currentPage,
       pageSize,

@@ -9,6 +9,7 @@ import os
 import sys
 
 from database import engine, Base, get_db
+from auth import get_current_user
 from routers import inventory, borrow, ai, dashboard, reminders, analysis, auth, reservation
 
 
@@ -106,10 +107,11 @@ def get_operation_logs(
     operation_type: str = None,
     username: str = None,
     skip: int = 0, limit: int = 100,
-    db=Depends(get_db)
+    db=Depends(get_db),
+    user=Depends(get_current_user)
 ):
     from crud import get_operation_logs
-    return get_operation_logs(db, operation_type=operation_type, username=username, skip=skip, limit=limit)
+    return get_operation_logs(db, operation_type=operation_type, username=username, skip=skip, limit=min(limit, 1000))
 
 
 @app.get("/")

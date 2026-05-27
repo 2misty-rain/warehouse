@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
-import io, csv, logging, traceback
+import io, csv, logging, re, traceback
 
 from database import get_db
 from models import Inventory, BorrowRecord
@@ -17,7 +17,7 @@ from crud import (
     batch_update_iot_card_status, batch_update_inventory_fields,
     get_device_timeline
 )
-from auth import get_optional_user
+from auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
@@ -37,7 +37,8 @@ def read_inventory(
     iot_card_status: str = "",
     delivery_date_start: Optional[str] = None,
     delivery_date_end: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user)
 ):
     query = db.query(Inventory)
 
@@ -60,7 +61,12 @@ def read_inventory(
     if owner:
         query = query.filter(Inventory.owner == owner)
     if iot_card_status:
-        query = query.filter(Inventory.iot_card_status == iot_card_status)
+        if iot_card_status == '未设置':
+            query = query.filter(
+                (Inventory.iot_card_status == None) | (Inventory.iot_card_status == '')
+            )
+        else:
+            query = query.filter(Inventory.iot_card_status == iot_card_status)
 
     if delivery_date_start:
         try:
@@ -83,6 +89,7 @@ def read_inventory(
 @router.get("/export/stream")
 def export_inventory(
     db: Session = Depends(get_db),
+    user=Depends(get_current_user),
     search: str = "",
     device_attribute: str = "", version: str = "",
     type: str = "", packaging: str = "", owner: str = "",
@@ -152,10 +159,10 @@ def export_inventory(
 
 
 @router.get("/import/template")
-def download_import_template():
+def download_import_template(user=Depends(get_current_user)):
     template = """版本,设备号,类型,包装,设备属性,归属人,领用人,销售,物联网卡状态,备注,补充信息,交付时间
 WiFi,DEV001,睡眠,简约,现有库存,张三,,,,,,2024-01-01
-4G,DEV002,跌倒,精品,组织售卖,李四,王五,赵六,,客户试用,,2024-01-15"""
+4G,DEV002,跌倒,精品,商机交付,李四,王五,赵六,,客户试用,,2024-01-15"""
     return StreamingResponse(
         iter([template.encode('utf-8-sig')]),
         media_type="text/csv",
@@ -164,7 +171,7 @@ WiFi,DEV001,睡眠,简约,现有库存,张三,,,,,,2024-01-01
 
 
 @router.get("/owners")
-def get_owners(db: Session = Depends(get_db)):
+def get_owners(db: Session = Depends(get_db), user=Depends(get_current_user)):
     """获取所有不重复的归属人列表（动态，用于筛选下拉）"""
     results = db.query(Inventory.owner).filter(
         Inventory.owner.isnot(None),
@@ -174,7 +181,7 @@ def get_owners(db: Session = Depends(get_db)):
 
 
 @router.get("/{device_id}", response_model=InventoryResponse)
-def read_inventory_item(device_id: str, db: Session = Depends(get_db)):
+def read_inventory_item(device_id: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
     item = get_inventory_by_device_id(db, device_id=device_id)
     if not item:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -182,7 +189,7 @@ def read_inventory_item(device_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{device_id}/detail")
-def read_inventory_detail(device_id: str, db: Session = Depends(get_db)):
+def read_inventory_detail(device_id: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
     device = get_inventory_by_device_id(db, device_id=device_id)
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -207,7 +214,7 @@ def read_inventory_detail(device_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{device_id}/timeline")
-def read_device_timeline(device_id: str, db: Session = Depends(get_db)):
+def read_device_timeline(device_id: str, db: Session = Depends(get_db), user=Depends(get_current_user)):
     device = get_inventory_by_device_id(db, device_id=device_id)
     if not device:
         raise HTTPException(status_code=404, detail="设备不存在")
@@ -219,7 +226,7 @@ def create_inventory_item(
     request: Request,
     inventory: InventoryCreate,
     db: Session = Depends(get_db),
-    user=Depends(get_optional_user)
+    user=Depends(get_current_user)
 ):
     existing_device = get_inventory_by_device_id(db, device_id=inventory.device_id)
     if existing_device:
@@ -238,7 +245,7 @@ def update_inventory_item(
     device_id: str,
     inventory_update: InventoryUpdate,
     db: Session = Depends(get_db),
-    user=Depends(get_optional_user)
+    user=Depends(get_current_user)
 ):
     item = update_inventory(db, device_id=device_id, inventory_update=inventory_update,
                             username=_get_username(request))
@@ -252,7 +259,7 @@ def delete_inventory_item(
     request: Request,
     device_id: str,
     db: Session = Depends(get_db),
-    user=Depends(get_optional_user)
+    user=Depends(get_current_user)
 ):
     success = delete_inventory(db, device_id=device_id, username=_get_username(request))
     if not success:
@@ -263,17 +270,21 @@ def delete_inventory_item(
 @router.put("/{device_id}/iot-card")
 def update_device_iot_card(
     device_id: str, data: IoTCardUpdate,
-    db: Session = Depends(get_db), user=Depends(get_optional_user)
+    db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
     success = update_iot_card_status(db, device_id, data.iot_card_status)
     if not success:
-        raise HTTPException(status_code=404, detail="设备不存在")
+        # 可能是设备不存在，也可能是 WiFi 设备
+        device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
+        if not device:
+            raise HTTPException(status_code=404, detail="设备不存在")
+        raise HTTPException(status_code=400, detail="仅4G设备支持IoT卡管理")
     return {"message": f"IoT卡状态已更新为: {data.iot_card_status}"}
 
 
 @router.post("/batch/delete")
 def batch_delete_inventory(data: dict, db: Session = Depends(get_db),
-                           user=Depends(get_optional_user)):
+                           user=Depends(get_current_user)):
     device_ids = data.get('device_ids', [])
     if not device_ids:
         raise HTTPException(status_code=400, detail="请选择要删除的设备")
@@ -291,6 +302,8 @@ def batch_delete_inventory(data: dict, db: Session = Depends(get_db),
             failed.append(f"{did}(借用中)")
             continue
         db.delete(device)
+        from crud import _log_operation
+        _log_operation(db, _get_username(request), "batch_delete", did, {"batch_size": len(device_ids)})
         deleted += 1
     db.commit()
     return {"message": f"成功删除 {deleted} 台设备", "deleted": deleted, "failed": failed}
@@ -298,7 +311,7 @@ def batch_delete_inventory(data: dict, db: Session = Depends(get_db),
 
 @router.post("/batch/iot-card")
 def batch_update_iot_card(data: BatchIoTCardUpdate, db: Session = Depends(get_db),
-                          user=Depends(get_optional_user)):
+                          user=Depends(get_current_user)):
     result = batch_update_iot_card_status(db, data.device_ids, data.iot_card_status)
     return {"message": f"批量更新完成", **result}
 
@@ -308,7 +321,7 @@ def batch_update_inventory(
     request: Request,
     data: BatchInventoryUpdate,
     db: Session = Depends(get_db),
-    user=Depends(get_optional_user)
+    user=Depends(get_current_user)
 ):
     """批量编辑设备：只更新非空字段，留空字段保持不变"""
     update_data = data.model_dump(exclude_unset=True)
@@ -326,7 +339,7 @@ def batch_update_inventory(
 @router.post("/import")
 async def import_inventory(
     file: UploadFile = File(...), db: Session = Depends(get_db),
-    user=Depends(get_optional_user)
+    user=Depends(get_current_user)
 ):
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="只支持CSV文件格式")
@@ -358,6 +371,10 @@ async def import_inventory(
                 device_id = cleaned_row.get('设备号', '').strip()
                 if not device_id:
                     errors.append(f"第{row_num}行：缺少必填字段(设备号)")
+                    error_count += 1
+                    continue
+                if len(device_id) != 12 or not re.match(r'^[A-Za-z]{3}\d{9}$', device_id):
+                    errors.append(f"第{row_num}行：设备号格式错误(应为3字母+9数字=12位): {device_id}")
                     error_count += 1
                     continue
 
@@ -398,7 +415,8 @@ async def import_inventory(
                 )
 
                 if existing:
-                    # 覆盖更新已有设备
+                    # 覆盖更新已有设备（含 serial_number）
+                    existing.serial_number = serial_number
                     update_inventory(db, device_id, update_data, username=_get_username(request))
                     success_count += 1
                     continue

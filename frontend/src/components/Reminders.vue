@@ -187,6 +187,8 @@ export default {
     };
 
     const createReminder = async () => {
+      const valid = await formRef.value.validate().catch(() => false);
+      if (!valid) return;
       try {
         await reminderAPI.create(newReminder.value);
         ElMessage.success('提醒创建成功');

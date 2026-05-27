@@ -75,9 +75,7 @@ const fetchData = async () => {
       skip: (page.value - 1) * pageSize.value,
       limit: pageSize.value
     };
-    if (filterStatus.value === '未设置') {
-      // 排除已开卡和已关卡的
-    } else if (filterStatus.value) {
+    if (filterStatus.value) {
       params.iot_card_status = filterStatus.value;
     }
     const res = await inventoryAPI.getAll(params);

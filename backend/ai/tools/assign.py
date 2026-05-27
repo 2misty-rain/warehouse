@@ -25,6 +25,10 @@ def _smart_assign(db, device_id: str, assign_type: str, target_owner=None, borro
     if not device:
         return {"success": False, "message": f"设备 {device_id} 不存在"}
 
+    valid_types = ('商机试用', '内部试用', '产品演示', '技术开发测试', '特殊占用', '现有库存', '异常处理')
+    if assign_type not in valid_types:
+        return {"success": False, "message": f"无效的分配类型: {assign_type}，可选值: {', '.join(valid_types)}"}
+
     if assign_type == '商机试用' and not expected_return_date:
         return {"success": False, "message": "商机试用必须提供预计归还日期"}
 

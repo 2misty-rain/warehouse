@@ -36,7 +36,7 @@ def _sell_device(db, device_id: str, customer: str, sales_person=None,
         active.status = 'terminated'
         active.remarks = f"{active.remarks or ''}\n(因售卖终止)"
 
-    device.device_attribute = '组织售卖'
+    device.device_attribute = '商机交付'
     device.owner = customer
     if sales_person:
         device.sales_person = sales_person

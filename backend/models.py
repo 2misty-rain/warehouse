@@ -12,7 +12,7 @@ class DeviceAttribute(str, PyEnum):
     BUSINESS_OPPORTUNITY = "商机试用"
     SPECIAL_OCCUPATION = "特殊占用"
     EXISTING_STOCK = "现有库存"
-    ORGANIZATION_SALE = "组织售卖"
+    ORGANIZATION_SALE = "商机交付"
     EXCEPTION_HANDLING = "异常处理"
 
 

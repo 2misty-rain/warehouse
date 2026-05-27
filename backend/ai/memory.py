@@ -45,11 +45,29 @@ class InventoryChatMessageHistory(BaseChatMessageHistory):
             from crud import save_conversation_history
             role = "user" if isinstance(message, HumanMessage) else "assistant"
             save_conversation_history(self._db, self._user_id, role, message.content)
+            # 保留最近200条，清理旧记录防止表无限增长
+            from models import ConversationHistory
+            old = self._db.query(ConversationHistory).filter(
+                ConversationHistory.user_id == self._user_id
+            ).order_by(ConversationHistory.created_at.desc()).offset(200).all()
+            for rec in old:
+                self._db.delete(rec)
+            if old:
+                self._db.flush()
         except Exception as e:
             logger.debug(f"对话持久化失败: {e}")
 
     def clear(self) -> None:
+        """清空内存 + 数据库中的对话历史"""
         self._messages.clear()
+        try:
+            from models import ConversationHistory
+            self._db.query(ConversationHistory).filter(
+                ConversationHistory.user_id == self._user_id
+            ).delete()
+            self._db.commit()
+        except Exception as e:
+            logger.debug(f"清除DB对话历史失败: {e}")
 
 
 def create_memory(user_id: str, db: Session) -> InventoryChatMessageHistory:

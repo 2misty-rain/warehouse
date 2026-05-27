@@ -8,13 +8,14 @@ from database import get_db
 from schemas import AIParseRequest
 from ai import agent_run
 from models import Inventory, BorrowRecord, Reminders
+from auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
 
 @router.get("/suggestions")
-def ai_suggestions(db: Session = Depends(get_db)):
+def ai_suggestions(db: Session = Depends(get_db), user=Depends(get_current_user)):
     """根据实时库存状态生成智能建议"""
     today = date.today()
     suggestions = []
@@ -56,10 +57,10 @@ def ai_suggestions(db: Session = Depends(get_db)):
 
 
 @router.post("/chat")
-def ai_chat(request: AIParseRequest, db: Session = Depends(get_db)):
+def ai_chat(request: AIParseRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """AI 对话: LangChain Agent 多轮推理 → 直接操作数据库 → 返回结果"""
     try:
-        user_id = getattr(request, 'user_id', 'default') or 'default'
+        user_id = user.username  # 每个用户独立对话历史
         result = agent_run(request.user_input, db, user_id)
         return result
     except Exception as e:
@@ -68,9 +69,9 @@ def ai_chat(request: AIParseRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/clear-history")
-def clear_chat_history(user_id: str = "default", db: Session = Depends(get_db)):
-    """清空对话历史"""
+def clear_chat_history(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """清空当前用户的对话历史"""
     from ai.memory import InventoryChatMessageHistory
-    mem = InventoryChatMessageHistory(user_id, db)
+    mem = InventoryChatMessageHistory(user.username, db)
     mem.clear()
     return {"success": True, "message": "对话历史已清空"}

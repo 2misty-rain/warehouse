@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    database_url: str = "mysql+pymysql://root:123456@localhost/inventory_db"
+    database_url: str = "mysql+pymysql://root:changeme@localhost/inventory_db"
     debug: bool = False
 
     class Config:

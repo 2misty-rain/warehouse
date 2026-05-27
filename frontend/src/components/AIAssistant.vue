@@ -59,10 +59,10 @@
         <div class="input-area">
           <el-input
             v-model="inputMessage"
-            placeholder="请输入您的问题，例如：当前库存情况如何？"
+            placeholder="请输入您的问题（Ctrl+Enter 发送）"
             :rows="3"
             type="textarea"
-            @keyup.enter="sendMessage"
+            @keydown.ctrl.enter="sendMessage"
           />
           <el-button
             type="primary"

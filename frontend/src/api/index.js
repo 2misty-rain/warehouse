@@ -60,6 +60,8 @@ export const inventoryAPI = {
   importCSV: (formData) => api.post('/inventory/import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   batchDelete: (deviceIds) => api.post('/inventory/batch/delete', { device_ids: deviceIds }),
   batchUpdate: (deviceIds, updateData) => api.post('/inventory/batch/update', { device_ids: deviceIds, ...updateData }),
+  downloadTemplate: () => api.get('/inventory/import/template', { responseType: 'blob' }).then(r => r.data),
+  exportCSV: (params = {}) => api.get('/inventory/export/stream', { params, responseType: 'blob' }).then(r => r.data),
 };
 
 // ========== Reminders ==========

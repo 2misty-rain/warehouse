@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
-from models import Inventory, Reminders, AILogs, BorrowRecord, OperationLog, User, ConversationHistory
+from models import Inventory, Reminders, AILogs, BorrowRecord, OperationLog, User, ConversationHistory, Reservation
 from schemas import InventoryCreate, InventoryUpdate, ReminderCreate, BorrowRecordCreate, BorrowRecordReturn
 from datetime import datetime, date, timedelta
 import json
@@ -28,6 +28,7 @@ def create_inventory(db: Session, inventory: InventoryCreate, username: str = "s
     db.flush()
     db.refresh(db_inventory)
     _log_operation(db, username, "create", db_inventory.device_id, data)
+    db.commit()
     return db_inventory
 
 
@@ -43,6 +44,7 @@ def update_inventory(db: Session, device_id: str, inventory_update: InventoryUpd
     db.flush()
     db.refresh(db_inventory)
     _log_operation(db, username, "update", device_id, inventory_update.model_dump(exclude_unset=True))
+    db.commit()
     return db_inventory
 
 
@@ -54,6 +56,7 @@ def delete_inventory(db: Session, device_id: str, username: str = "system"):
     db.delete(db_inventory)
     db.flush()
     _log_operation(db, username, "delete", device_id, {"device_id": device_id})
+    db.commit()
     return True
 
 
@@ -74,10 +77,12 @@ def update_iot_card_status(db: Session, device_id: str, status: str, username: s
     device = db.query(Inventory).filter(Inventory.device_id == device_id).first()
     if not device:
         return False
+    if device.version != '4G':
+        return False  # WiFi设备无IoT卡
     device.iot_card_status = status
     device.updated_at = datetime.utcnow()
-    db.commit()
     _log_operation(db, username, "update_iot", device_id, {"iot_card_status": status})
+    db.commit()
     return True
 
 
@@ -109,6 +114,9 @@ def batch_update_inventory_fields(db: Session, device_ids: list, update_data: di
             failed.append(device_id)
             continue
         for key, value in fields_to_update.items():
+            # WiFi设备跳过IoT卡状态
+            if key == 'iot_card_status' and device.version != '4G':
+                continue
             setattr(device, key, value)
         device.updated_at = datetime.utcnow()
         updated += 1
@@ -180,7 +188,7 @@ def _log_operation(db: Session, username: str, operation_type: str, device_id: s
             details=json.dumps(details, ensure_ascii=False, default=str)
         )
         db.add(log)
-        db.commit()
+        db.flush()
     except Exception as e:
         logger.warning(f"操作日志记录失败(非关键): {e}")
 
@@ -201,9 +209,12 @@ def get_operation_logs(db: Session, operation_type: str = None, username: str = 
 
 def get_dashboard_stats(db: Session):
     total_devices = db.query(Inventory).count()
-    available_devices = db.query(Inventory).filter(Inventory.borrower == None).count()
+    available_devices = db.query(Inventory).filter(
+        Inventory.borrower == None,
+        Inventory.device_attribute != '商机交付'
+    ).count()
     sold_devices = db.query(Inventory).filter(
-        Inventory.device_attribute.in_(['已售出', '组织售卖'])
+        Inventory.device_attribute == '商机交付'
     ).count()
 
     wifi_devices = db.query(Inventory).filter(Inventory.version == "WiFi").count()
@@ -256,7 +267,7 @@ def get_sales_trend(db: Session):
         func.extract('month', Inventory.delivery_date).label('month'),
         func.count(Inventory.id).label('count')
     ).filter(
-        Inventory.device_attribute.in_(['已售出', '组织售卖']),
+        Inventory.device_attribute == '商机交付',
         Inventory.delivery_date.isnot(None)
     ).group_by(
         func.extract('month', Inventory.delivery_date)
@@ -334,7 +345,7 @@ def get_monthly_report(db: Session) -> dict:
     ).all()
 
     total_outbound = len(month_devices)
-    sold_count = sum(1 for d in month_devices if d.device_attribute in ('组织售卖', '已售出'))
+    sold_count = sum(1 for d in month_devices if d.device_attribute == '商机交付')
     trial_count = sum(1 for d in month_devices if d.device_attribute == '商机试用')
     demo_count = sum(1 for d in month_devices if d.device_attribute == '产品演示')
     dev_count = sum(1 for d in month_devices if d.device_attribute == '技术开发/测试')
@@ -375,7 +386,7 @@ def get_monthly_report(db: Session) -> dict:
 def get_sales_analysis(db: Session, time_range: str = "全部", group_by: str = None) -> dict:
     """获取销售深度分析"""
     query = db.query(Inventory).filter(
-        Inventory.device_attribute.in_(['组织售卖', '已售出'])
+        Inventory.device_attribute == '商机交付'
     )
 
     today = date.today()
@@ -395,7 +406,8 @@ def get_sales_analysis(db: Session, time_range: str = "全部", group_by: str = 
     sold_devices = query.all()
     total_sold = len(sold_devices)
 
-    result = {"total_sold": total_sold, "time_range": time_range}
+    result = {"total_sold": total_sold, "time_range": time_range,
+              "by_owner": [], "by_version": [], "by_type": []}
 
     if not group_by or "owner" in (group_by or ""):
         owner_counts = {}
@@ -502,25 +514,24 @@ def return_device(db: Session, record_id: int, return_data: BorrowRecordReturn, 
     device = db.query(Inventory).filter(Inventory.device_id == db_record.device_id).first()
     if device:
         device.borrower = None
-        # 试用/演示归还后回归现有库存
-        # 归还后: 所有"使用中"状态回归现有库存
-        in_use_attrs = ('商机试用', '内部试用', '产品演示', '技术开发/测试', '特殊占用')
-        if device.device_attribute in in_use_attrs:
-            device.device_attribute = '现有库存'
-            device.owner = None
-            device.sales_person = None
-            device.supplementary_info = None
+        # 归还后无条件重置为现有库存，清除所有分配信息
+        device.device_attribute = '现有库存'
+        device.owner = None
+        device.sales_person = None
+        device.supplementary_info = None
+        device.remarks = ''
+        device.delivery_date = None
 
+    _log_operation(db, username, "return", db_record.device_id, {"record_id": record_id})
     db.commit()
     db.refresh(db_record)
-    _log_operation(db, username, "return", db_record.device_id, {"record_id": record_id})
     return db_record
 
 
 def get_overdue_borrows(db: Session):
     today = date.today()
     return db.query(BorrowRecord).filter(
-        BorrowRecord.status == 'borrowed',
+        BorrowRecord.status.in_(['borrowed', 'overdue']),
         BorrowRecord.expected_return_date < today
     ).all()
 
@@ -638,7 +649,6 @@ def load_conversation_history(db: Session, user_id: str, limit: int = 20):
 # ========== Reservation CRUD ==========
 
 def create_reservation(db: Session, data: dict, applicant: str):
-    from models import Reservation
     reservation = Reservation(
         applicant=applicant,
         quantity=data.get('quantity', 1),
@@ -658,7 +668,6 @@ def create_reservation(db: Session, data: dict, applicant: str):
 
 def get_reservations(db: Session, applicant: str = None, status: str = None,
                      skip: int = 0, limit: int = 100):
-    from models import Reservation
     query = db.query(Reservation)
     if applicant:
         query = query.filter(Reservation.applicant == applicant)
@@ -670,19 +679,16 @@ def get_reservations(db: Session, applicant: str = None, status: str = None,
 
 
 def get_reservation_by_id(db: Session, reservation_id: int):
-    from models import Reservation
     return db.query(Reservation).filter(Reservation.id == reservation_id).first()
 
 
 def get_pending_reservations_count(db: Session) -> int:
-    from models import Reservation
     return db.query(Reservation).filter(Reservation.status == 'pending').count()
 
 
 def approve_reservation(db: Session, reservation_id: int, assigned_devices: list,
                         admin_username: str, admin_remarks: str = None):
     import json
-    from models import Reservation
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     if not reservation:
         raise ValueError("申请不存在")
@@ -703,7 +709,7 @@ def approve_reservation(db: Session, reservation_id: int, assigned_devices: list
 def fulfill_reservation(db: Session, reservation_id: int, admin_username: str):
     """执行出库：修改库存设备属性 + 创建借出记录"""
     import json
-    from models import Reservation, Inventory, BorrowRecord
+    from models import Inventory, BorrowRecord
 
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     if not reservation:
@@ -718,22 +724,34 @@ def fulfill_reservation(db: Session, reservation_id: int, admin_username: str):
     fulfilled = []
     failed = []
     for did in device_ids:
-        device = db.query(Inventory).filter(Inventory.device_id == did).first()
+        device = db.query(Inventory).filter(
+            Inventory.device_id == did
+        ).with_for_update().first()
         if not device:
             failed.append(f"{did}(不存在)")
             continue
+        if device.device_attribute == '商机交付':
+            failed.append(f"{did}(已售出)")
+            continue
+        if device.borrower:
+            failed.append(f"{did}(被{device.borrower}借用中)")
+            continue
 
         # 更新设备为组织售卖
-        device.device_attribute = '组织售卖'
+        device.device_attribute = '商机交付'
         device.owner = reservation.client_name or ''
         device.sales_person = reservation.sales_person or ''
         device.delivery_date = date.today()
         device.updated_at = datetime.utcnow()
 
         # 创建出库记录
+        borrower_name = (reservation.sales_person or '').strip() or (reservation.applicant or '').strip()
+        if not borrower_name:
+            failed.append(f"{did}(无有效借用人)")
+            continue
         borrow = BorrowRecord(
             device_id=did,
-            borrower=reservation.sales_person or reservation.applicant,
+            borrower=borrower_name,
             expected_return_date=reservation.required_date,
             purpose=f"组织售卖出库: {reservation.purpose or ''}",
             status='borrowed',
@@ -753,7 +771,6 @@ def fulfill_reservation(db: Session, reservation_id: int, admin_username: str):
 
 def reject_reservation(db: Session, reservation_id: int, admin_username: str,
                        admin_remarks: str = None):
-    from models import Reservation
     reservation = db.query(Reservation).filter(Reservation.id == reservation_id).first()
     if not reservation:
         raise ValueError("申请不存在")

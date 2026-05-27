@@ -104,4 +104,4 @@ def run(user_input: str, db: Session, user_id: str = "default") -> dict:
         logger.error(f"Agent 错误: {e}")
         import traceback
         logger.debug(traceback.format_exc())
-        return {"success": False, "reply": f"AI 服务异常: {str(e)}"}
+        return {"success": False, "reply": "AI 服务暂时不可用，请稍后重试。"}
