@@ -22,7 +22,7 @@
     </div>
 
     <el-table :data="borrowRecords" v-loading="loading" style="width: 100%" border stripe
-      @selection-change="handleSelectionChange">
+      @selection-change="handleSelectionChange" row-key="id">
       <el-table-column type="selection" width="50" :selectable="row => row.status !== 'returned'" />
       <el-table-column prop="id" label="ID" width="60" />
       <el-table-column prop="device_id" label="设备号" width="140" sortable />

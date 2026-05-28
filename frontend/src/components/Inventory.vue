@@ -84,6 +84,7 @@
       border
       stripe
       @selection-change="handleSelectionChange"
+      row-key="device_id"
     >
       <el-table-column type="selection" width="50" />
       <el-table-column prop="device_id" label="设备号" width="150" sortable></el-table-column>

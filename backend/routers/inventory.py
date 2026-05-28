@@ -283,7 +283,7 @@ def update_device_iot_card(
 
 
 @router.post("/batch/delete")
-def batch_delete_inventory(data: dict, db: Session = Depends(get_db),
+def batch_delete_inventory(request: Request, data: dict, db: Session = Depends(get_db),
                            user=Depends(get_current_user)):
     device_ids = data.get('device_ids', [])
     if not device_ids:
