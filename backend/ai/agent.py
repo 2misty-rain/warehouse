@@ -5,7 +5,7 @@ LangGraph Agent - ReAct 模式
 import logging
 from functools import partial
 from sqlalchemy.orm import Session
-from langchain_community.chat_models.tongyi import ChatTongyi
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -34,10 +34,11 @@ def run(user_input: str, db: Session, user_id: str = "default") -> dict:
     """执行一次 AI 对话，返回 {"success": bool, "reply": str}"""
 
     try:
-        # 1. 创建 LLM（低温度，库存场景需要确定性）
-        llm = ChatTongyi(
-            model="qwen-plus",
-            dashscope_api_key=ai_settings.dashscope_api_key,
+        # 1. 创建 LLM（通过百炼 OpenAI 兼容 API，支持 qwen3.6 等新模型）
+        llm = ChatOpenAI(
+            model="qwen3.6-plus",
+            api_key=ai_settings.dashscope_api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             temperature=0.2,
             top_p=0.8,
             streaming=False,
@@ -101,7 +102,16 @@ def run(user_input: str, db: Session, user_id: str = "default") -> dict:
         return {"success": True, "reply": output}
 
     except Exception as e:
-        logger.error(f"Agent 错误: {e}")
         import traceback
-        logger.debug(traceback.format_exc())
-        return {"success": False, "reply": "AI 服务暂时不可用，请稍后重试。"}
+        tb = traceback.format_exc()
+        logger.error(f"Agent 错误: {e}\n{tb}")
+
+        # 尝试从异常链中提取 DashScope API 的真实错误信息
+        err_msg = str(e)
+        # dashscope SDK bug: response.__getattr__ 会在访问不存在的字段时抛 KeyError
+        # 这里尝试从 traceback 中解析出真正的 HTTP 响应
+        if '403' in tb and 'FreeTierOnly' not in err_msg:
+            err_msg = "DashScope API 调用失败 (403): 免费额度已耗尽或无权限，请检查 API Key 配额。"
+        elif 'KeyError' in str(type(e).__name__) or 'request' in err_msg:
+            err_msg = "DashScope API 调用失败，请检查 API Key 是否有可用额度。"
+        return {"success": False, "reply": f"AI 服务错误: {err_msg}"}
