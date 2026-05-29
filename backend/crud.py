@@ -1,6 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 from models import Inventory, Reminders, AILogs, BorrowRecord, OperationLog, User, ConversationHistory, Reservation
+from models import DeviceStatusLog, DeviceGroup, DeviceGroupItem, OfflineIncident, AnomalyRecord, AnomalyAction
+from models import DataSyncLog, DailyReport, WeeklyReport, FirmwareConfig
+from models import DeviceTag, SmartGroupRule, DeviceHealthScore, InstitutionRegion, BatchOperation
 from schemas import InventoryCreate, InventoryUpdate, ReminderCreate, BorrowRecordCreate, BorrowRecordReturn
 from datetime import datetime, date, timedelta
 import json
@@ -785,3 +788,929 @@ def reject_reservation(db: Session, reservation_id: int, admin_username: str,
     db.commit()
     db.refresh(reservation)
     return reservation
+
+
+# ========== 运营平台 CRUD ==========
+
+# --- Device Status Logs ---
+
+def save_device_status_logs(db: Session, logs: list) -> int:
+    """批量保存设备状态检查记录"""
+    count = 0
+    for log_data in logs:
+        entry = DeviceStatusLog(**log_data)
+        db.add(entry)
+        count += 1
+    db.commit()
+    return count
+
+
+def get_latest_device_status(db: Session, device_ids: list = None, organization: str = None) -> list:
+    """获取设备最新状态（每个设备取最新一条）"""
+    from sqlalchemy import and_
+
+    subq = db.query(
+        DeviceStatusLog.device_id,
+        func.max(DeviceStatusLog.check_time).label('max_time')
+    ).group_by(DeviceStatusLog.device_id)
+
+    if device_ids:
+        subq = subq.filter(DeviceStatusLog.device_id.in_(device_ids))
+
+    subq = subq.subquery()
+
+    query = db.query(DeviceStatusLog).join(
+        subq,
+        and_(
+            DeviceStatusLog.device_id == subq.c.device_id,
+            DeviceStatusLog.check_time == subq.c.max_time
+        )
+    )
+
+    if organization:
+        query = query.filter(DeviceStatusLog.organization == organization)
+
+    return query.all()
+
+
+def get_device_status_history(db: Session, device_id: str, days: int = 7) -> list:
+    """获取设备状态历史"""
+    since = datetime.utcnow() - timedelta(days=days)
+    return db.query(DeviceStatusLog).filter(
+        DeviceStatusLog.device_id == device_id,
+        DeviceStatusLog.check_time >= since
+    ).order_by(DeviceStatusLog.check_time.desc()).all()
+
+
+# --- Device Groups ---
+
+def create_device_group(db: Session, name: str, device_ids: list, username: str, description: str = None) -> DeviceGroup:
+    group = DeviceGroup(name=name, description=description, created_by=username)
+    db.add(group)
+    db.flush()
+    for did in device_ids:
+        item = DeviceGroupItem(group_id=group.id, device_id=did)
+        db.add(item)
+    db.commit()
+    db.refresh(group)
+    return group
+
+
+def get_device_groups(db: Session) -> list:
+    groups = db.query(DeviceGroup).order_by(DeviceGroup.created_at.desc()).all()
+    result = []
+    for g in groups:
+        items = db.query(DeviceGroupItem).filter(DeviceGroupItem.group_id == g.id).all()
+        result.append({
+            "id": g.id,
+            "name": g.name,
+            "description": g.description,
+            "created_by": g.created_by,
+            "device_count": len(items),
+            "device_ids": [item.device_id for item in items],
+            "created_at": g.created_at.strftime("%Y-%m-%d %H:%M") if g.created_at else None,
+        })
+    return result
+
+
+def get_device_group_by_id(db: Session, group_id: int) -> dict:
+    g = db.query(DeviceGroup).filter(DeviceGroup.id == group_id).first()
+    if not g:
+        return None
+    items = db.query(DeviceGroupItem).filter(DeviceGroupItem.group_id == g.id).all()
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_by": g.created_by,
+        "device_count": len(items),
+        "device_ids": [item.device_id for item in items],
+        "created_at": g.created_at.strftime("%Y-%m-%d %H:%M") if g.created_at else None,
+    }
+
+
+def update_device_group(db: Session, group_id: int, name: str = None, description: str = None, device_ids: list = None) -> dict:
+    g = db.query(DeviceGroup).filter(DeviceGroup.id == group_id).first()
+    if not g:
+        return None
+    if name:
+        g.name = name
+    if description is not None:
+        g.description = description
+    if device_ids is not None:
+        db.query(DeviceGroupItem).filter(DeviceGroupItem.group_id == group_id).delete()
+        for did in device_ids:
+            item = DeviceGroupItem(group_id=group_id, device_id=did)
+            db.add(item)
+    db.commit()
+    return get_device_group_by_id(db, group_id)
+
+
+def delete_device_group(db: Session, group_id: int) -> bool:
+    g = db.query(DeviceGroup).filter(DeviceGroup.id == group_id).first()
+    if not g:
+        return False
+    db.query(DeviceGroupItem).filter(DeviceGroupItem.group_id == group_id).delete()
+    db.delete(g)
+    db.commit()
+    return True
+
+
+# --- Offline Incidents ---
+
+def create_offline_incident(db: Session, device_id: str, organization: str, offline_duration: int = 0,
+                            firmware_version: str = None) -> OfflineIncident:
+    """创建离线事件（如果同设备同原因已静默则跳过）"""
+    silenced = db.query(OfflineIncident).filter(
+        OfflineIncident.device_id == device_id,
+        OfflineIncident.is_silenced == True
+    ).first()
+    if silenced:
+        return None
+
+    incident = OfflineIncident(
+        device_id=device_id,
+        organization=organization,
+        detected_at=datetime.utcnow(),
+        offline_duration=offline_duration,
+        firmware_version=firmware_version,
+        status='待处理'
+    )
+    db.add(incident)
+    db.commit()
+    db.refresh(incident)
+    return incident
+
+
+def get_offline_incidents(db: Session, status: str = None, organization: str = None,
+                          skip: int = 0, limit: int = 100) -> dict:
+    query = db.query(OfflineIncident)
+    if status:
+        query = query.filter(OfflineIncident.status == status)
+    if organization:
+        query = query.filter(OfflineIncident.organization == organization)
+    total = query.count()
+    items = query.order_by(OfflineIncident.detected_at.desc()).offset(skip).limit(limit).all()
+    return {"total": total, "items": items}
+
+
+def handle_offline_incident(db: Session, incident_id: int, reason_tag: str, notes: str, username: str) -> OfflineIncident:
+    incident = db.query(OfflineIncident).filter(OfflineIncident.id == incident_id).first()
+    if not incident:
+        return None
+    incident.reason_tag = reason_tag
+    incident.notes = notes
+    incident.handled_by = username
+    incident.handled_at = datetime.utcnow()
+    incident.status = '已处理'
+    if reason_tag == '用户断电':
+        incident.is_silenced = True
+    db.commit()
+    db.refresh(incident)
+    return incident
+
+
+def auto_close_offline_incident(db: Session, device_id: str) -> int:
+    """设备恢复上线后自动关闭未处理事件"""
+    count = db.query(OfflineIncident).filter(
+        OfflineIncident.device_id == device_id,
+        OfflineIncident.status == '待处理'
+    ).update({"status": "已关闭", "updated_at": datetime.utcnow()})
+    db.commit()
+    return count
+
+
+# --- Anomaly Records ---
+
+def create_anomaly_records_batch(db: Session, records: list) -> int:
+    """批量创建异常记录（去重 + 忽略规则过滤）"""
+    from models import AnomalyIgnoreRule
+
+    # 加载所有忽略规则
+    ignore_rules = db.query(AnomalyIgnoreRule).all()
+    ignore_map = {}
+    for rule in ignore_rules:
+        key = (rule.device_id, rule.anomaly_type or '*')
+        ignore_map[key] = True
+
+    count = 0
+    for r in records:
+        did = r.get('device_id', '')
+        atype = r.get('anomaly_type', '')
+
+        # 检查忽略规则
+        if (did, atype) in ignore_map or (did, '*') in ignore_map:
+            continue
+
+        exists = db.query(AnomalyRecord).filter(
+            AnomalyRecord.record_date == r.get('record_date'),
+            AnomalyRecord.device_id == did,
+            AnomalyRecord.anomaly_type == atype
+        ).first()
+        if exists:
+            continue
+        entry = AnomalyRecord(**r)
+        db.add(entry)
+        count += 1
+    db.commit()
+    return count
+
+
+def get_anomaly_records(db: Session, status: str = None, institution: str = None,
+                        anomaly_type: str = None, priority: str = None,
+                        record_date: str = None, algorithm_tag: str = None,
+                        search: str = None, skip: int = 0, limit: int = 100) -> dict:
+    query = db.query(AnomalyRecord)
+    if status:
+        query = query.filter(AnomalyRecord.status == status)
+    if institution:
+        query = query.filter(AnomalyRecord.institution == institution)
+    if anomaly_type:
+        query = query.filter(AnomalyRecord.anomaly_type == anomaly_type)
+    if priority:
+        query = query.filter(AnomalyRecord.priority == priority)
+    if record_date:
+        try:
+            rd = datetime.strptime(record_date, "%Y-%m-%d").date()
+            query = query.filter(AnomalyRecord.record_date == rd)
+        except ValueError:
+            pass
+    if algorithm_tag:
+        query = query.filter(AnomalyRecord.algorithm_tag == algorithm_tag)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            (AnomalyRecord.person_name.like(pattern)) |
+            (AnomalyRecord.device_id.like(pattern)) |
+            (AnomalyRecord.institution.like(pattern))
+        )
+    total = query.count()
+    items = query.order_by(
+        AnomalyRecord.priority.desc(),
+        AnomalyRecord.created_at.desc()
+    ).offset(skip).limit(limit).all()
+    return {"total": total, "items": items}
+
+
+def get_anomaly_stats(db: Session) -> dict:
+    """获取异常工单各状态计数"""
+    statuses = ['待处理', '处理中', '待回访', '已完成', '已归档']
+    result = {}
+    for s in statuses:
+        result[s] = db.query(AnomalyRecord).filter(AnomalyRecord.status == s).count()
+    return result
+
+
+def tag_anomaly_record(db: Session, record_id: int, algorithm_tag: str, algorithm_notes: str, username: str) -> AnomalyRecord:
+    """算法标记异常记录"""
+    record = db.query(AnomalyRecord).filter(AnomalyRecord.id == record_id).first()
+    if not record:
+        return None
+    record.algorithm_tag = algorithm_tag
+    record.algorithm_notes = algorithm_notes
+    if algorithm_tag == '需要回访':
+        record.status = '待回访'
+    elif algorithm_tag == '算法问题':
+        record.status = '已归档'
+    elif algorithm_tag == '真实案例':
+        record.status = '处理中'
+    record.updated_at = datetime.utcnow()
+
+    # 记录操作
+    action = AnomalyAction(
+        record_id=record_id,
+        action_by=username,
+        action_type='标记',
+        content=f"标记为: {algorithm_tag}" + (f" ({algorithm_notes})" if algorithm_notes else "")
+    )
+    db.add(action)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def handle_anomaly_record(db: Session, record_id: int, resolution: str, username: str, notes: str = None) -> AnomalyRecord:
+    """处理异常工单（回访/完成操作）"""
+    record = db.query(AnomalyRecord).filter(AnomalyRecord.id == record_id).first()
+    if not record:
+        return None
+    record.resolution = resolution
+    record.assigned_to = username
+    record.status = '已完成'
+    record.resolved_at = datetime.utcnow()
+    record.updated_at = datetime.utcnow()
+
+    action = AnomalyAction(
+        record_id=record_id,
+        action_by=username,
+        action_type='完成',
+        content=f"处理完成: {resolution}" + (f" (备注: {notes})" if notes else "")
+    )
+    db.add(action)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def add_anomaly_note(db: Session, record_id: int, content: str, username: str) -> AnomalyAction:
+    """添加工单备注"""
+    action = AnomalyAction(
+        record_id=record_id,
+        action_by=username,
+        action_type='备注',
+        content=content
+    )
+    db.add(action)
+    db.commit()
+    db.refresh(action)
+    return action
+
+
+def get_anomaly_actions(db: Session, record_id: int) -> list:
+    """获取工单操作时间线"""
+    return db.query(AnomalyAction).filter(
+        AnomalyAction.record_id == record_id
+    ).order_by(AnomalyAction.created_at.asc()).all()
+
+
+# --- Data Sync Logs ---
+
+def create_sync_log(db: Session, sync_date: date, sync_type: str = 'auto') -> DataSyncLog:
+    log = DataSyncLog(
+        sync_date=sync_date,
+        sync_type=sync_type,
+        status='running',
+        started_at=datetime.utcnow()
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+def update_sync_log(db: Session, log_id: int, status: str, stats: dict = None, error_message: str = None):
+    log = db.query(DataSyncLog).filter(DataSyncLog.id == log_id).first()
+    if not log:
+        return
+    log.status = status
+    log.finished_at = datetime.utcnow()
+    if stats:
+        log.stats = stats
+    if error_message:
+        log.error_message = error_message
+    db.commit()
+
+
+def get_latest_sync_log(db: Session, sync_type: str = None) -> DataSyncLog:
+    query = db.query(DataSyncLog)
+    if sync_type:
+        query = query.filter(DataSyncLog.sync_type == sync_type)
+    return query.order_by(DataSyncLog.started_at.desc()).first()
+
+
+# --- Reports ---
+
+def create_daily_report(db: Session, report_date: date, data: dict) -> DailyReport:
+    existing = db.query(DailyReport).filter(DailyReport.report_date == report_date).first()
+    if existing:
+        for k, v in data.items():
+            setattr(existing, k, v)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    report = DailyReport(report_date=report_date, **data)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+def get_daily_report(db: Session, report_date: date) -> DailyReport:
+    return db.query(DailyReport).filter(DailyReport.report_date == report_date).first()
+
+
+def create_weekly_report(db: Session, week_start: date, week_end: date, data: dict) -> WeeklyReport:
+    existing = db.query(WeeklyReport).filter(
+        WeeklyReport.week_start == week_start,
+        WeeklyReport.week_end == week_end
+    ).first()
+    if existing:
+        for k, v in data.items():
+            setattr(existing, k, v)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    report = WeeklyReport(week_start=week_start, week_end=week_end, **data)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+def get_weekly_report(db: Session, week_start: date = None, week_end: date = None) -> WeeklyReport:
+    query = db.query(WeeklyReport)
+    if week_start:
+        query = query.filter(WeeklyReport.week_start == week_start)
+    if week_end:
+        query = query.filter(WeeklyReport.week_end == week_end)
+    return query.order_by(WeeklyReport.week_start.desc()).first()
+
+
+# --- Firmware Config ---
+
+def get_firmware_config(db: Session) -> FirmwareConfig:
+    return db.query(FirmwareConfig).order_by(FirmwareConfig.id.desc()).first()
+
+
+def set_firmware_config(db: Session, version: str, username: str) -> FirmwareConfig:
+    config = FirmwareConfig(
+        current_normal_version=version,
+        updated_by=username,
+        updated_at=datetime.utcnow()
+    )
+    db.add(config)
+    db.commit()
+    db.refresh(config)
+    return config
+
+
+# --- Device Monitoring Page Helpers ---
+
+def get_monitored_devices(db: Session, attributes: list = None) -> list:
+    """获取需要监控的设备列表（从库存表）"""
+    if attributes is None:
+        attributes = ['商机交付', '商机试用']
+    devices = db.query(Inventory).filter(
+        Inventory.device_attribute.in_(attributes)
+    ).all()
+    return devices
+
+
+def get_organization_device_summary(db: Session, attributes: list = None) -> list:
+    """按机构统计监控设备数量（从库存表）"""
+    if attributes is None:
+        attributes = ['商机交付', '商机试用']
+
+    devices = db.query(Inventory).filter(
+        Inventory.device_attribute.in_(attributes)
+    ).all()
+
+    org_map = {}
+    for d in devices:
+        org = d.owner or '未分配机构'
+        if org not in org_map:
+            org_map[org] = {"total": 0, "device_ids": []}
+        org_map[org]["total"] += 1
+        org_map[org]["device_ids"].append(d.device_id)
+
+    return [{"organization": k, **v} for k, v in org_map.items()]
+
+
+# ========== 企业级扩展 CRUD ==========
+
+# --- Device Tags ---
+
+def set_device_tags(db: Session, device_ids: list, tag_key: str, tag_value: str, username: str) -> int:
+    """给设备设置标签（覆盖同key标签）"""
+    count = 0
+    for did in device_ids:
+        existing = db.query(DeviceTag).filter(
+            DeviceTag.device_id == did, DeviceTag.tag_key == tag_key
+        ).first()
+        if existing:
+            existing.tag_value = tag_value
+        else:
+            db.add(DeviceTag(device_id=did, tag_key=tag_key, tag_value=tag_value, created_by=username))
+        count += 1
+    db.commit()
+    return count
+
+
+def delete_device_tag(db: Session, device_id: str, tag_key: str) -> bool:
+    db.query(DeviceTag).filter(
+        DeviceTag.device_id == device_id, DeviceTag.tag_key == tag_key
+    ).delete()
+    db.commit()
+    return True
+
+
+def get_device_tags(db: Session, device_id: str) -> dict:
+    tags = db.query(DeviceTag).filter(DeviceTag.device_id == device_id).all()
+    return {t.tag_key: t.tag_value for t in tags}
+
+
+def get_all_tags(db: Session) -> list:
+    """获取所有已存在的标签键值对"""
+    tags = db.query(DeviceTag).all()
+    tag_map = {}
+    for t in tags:
+        if t.tag_key not in tag_map:
+            tag_map[t.tag_key] = set()
+        tag_map[t.tag_key].add(t.tag_value)
+    return [{"key": k, "values": list(v)} for k, v in tag_map.items()]
+
+
+def get_devices_by_tag(db: Session, tag_key: str, tag_value: str) -> list:
+    tags = db.query(DeviceTag).filter(
+        DeviceTag.tag_key == tag_key, DeviceTag.tag_value == tag_value
+    ).all()
+    return [t.device_id for t in tags]
+
+
+# --- Smart Group Rules ---
+
+def create_smart_group(db: Session, data: dict, username: str) -> SmartGroupRule:
+    rule = SmartGroupRule(
+        name=data['name'],
+        description=data.get('description', ''),
+        rule_type='smart',
+        conditions=data['conditions'],
+        created_by=username
+    )
+    db.add(rule)
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+def get_smart_groups(db: Session) -> list:
+    return db.query(SmartGroupRule).order_by(SmartGroupRule.created_at.desc()).all()
+
+
+def get_smart_group_by_id(db: Session, rule_id: int) -> SmartGroupRule:
+    return db.query(SmartGroupRule).filter(SmartGroupRule.id == rule_id).first()
+
+
+def update_smart_group(db: Session, rule_id: int, data: dict) -> SmartGroupRule:
+    rule = db.query(SmartGroupRule).filter(SmartGroupRule.id == rule_id).first()
+    if not rule:
+        return None
+    for k, v in data.items():
+        if v is not None:
+            setattr(rule, k, v)
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+def delete_smart_group(db: Session, rule_id: int) -> bool:
+    rule = db.query(SmartGroupRule).filter(SmartGroupRule.id == rule_id).first()
+    if not rule:
+        return False
+    db.delete(rule)
+    db.commit()
+    return True
+
+
+def evaluate_smart_group(db: Session, rule_id: int) -> list:
+    """评估智能分组规则，返回匹配的设备号列表"""
+    rule = db.query(SmartGroupRule).filter(SmartGroupRule.id == rule_id).first()
+    if not rule or not rule.enabled:
+        return []
+
+    conditions = rule.conditions
+    logic = conditions.get('logic', 'AND')
+    filters = conditions.get('filters', [])
+
+    if not filters:
+        return []
+
+    query = db.query(Inventory)
+
+    for f in filters:
+        field = f.get('field', '')
+        op = f.get('operator', 'eq')
+        value = f.get('value', '')
+
+        if field.startswith('tags.'):
+            # 标签字段：子查询
+            tag_key = field[5:]
+            tagged_devices = get_devices_by_tag(db, tag_key, value)
+            if logic == 'AND':
+                query = query.filter(Inventory.device_id.in_(tagged_devices))
+            else:
+                query = query.filter(Inventory.device_id.in_(tagged_devices))
+        elif field == 'device_attribute':
+            query = _apply_filter(query, Inventory.device_attribute, op, value, logic)
+        elif field == 'version':
+            query = _apply_filter(query, Inventory.version, op, value, logic)
+        elif field == 'type':
+            query = _apply_filter(query, Inventory.type, op, value, logic)
+        elif field == 'owner':
+            query = _apply_filter(query, Inventory.owner, op, value, logic)
+        elif field == 'packaging':
+            query = _apply_filter(query, Inventory.packaging, op, value, logic)
+
+    devices = query.all()
+    return [d.device_id for d in devices]
+
+
+def _apply_filter(query, column, op: str, value: str, logic: str):
+    """应用单个过滤条件"""
+    if op == 'eq':
+        return query.filter(column == value)
+    elif op == 'neq':
+        return query.filter(column != value)
+    elif op == 'contains':
+        return query.filter(column.like(f'%{value}%'))
+    elif op == 'in':
+        vals = [v.strip() for v in value.split(',')]
+        return query.filter(column.in_(vals))
+    return query
+
+
+# --- Device Health Score ---
+
+def calculate_device_health(db: Session, device_id: str) -> dict:
+    """计算单个设备的健康度评分"""
+    from datetime import datetime as dt
+
+    # 1. 在线率子分 (40%)
+    recent_logs = db.query(DeviceStatusLog).filter(
+        DeviceStatusLog.device_id == device_id
+    ).order_by(DeviceStatusLog.check_time.desc()).limit(10).all()
+
+    if recent_logs:
+        online_count = sum(1 for l in recent_logs if l.is_online)
+        online_rate = online_count / len(recent_logs)
+        online_score = int(online_rate * 100)
+    else:
+        online_score = 100  # 无数据默认满分
+
+    # 2. 固件合规子分 (30%)
+    latest = recent_logs[0] if recent_logs else None
+    fw_config = db.query(FirmwareConfig).order_by(FirmwareConfig.id.desc()).first()
+    if latest and fw_config and latest.firmware_version:
+        from routers.operations import _version_less_than
+        if latest.needs_firmware_update:
+            firmware_score = 40
+        else:
+            firmware_score = 100
+    else:
+        firmware_score = 100
+
+    # 3. 异常频率子分 (20%)
+    today = dt.utcnow().date()
+    week_ago = today - timedelta(days=7)
+    recent_anomalies = db.query(AnomalyRecord).filter(
+        AnomalyRecord.device_id == device_id,
+        AnomalyRecord.record_date >= week_ago
+    ).count()
+    if recent_anomalies >= 5:
+        anomaly_score = 0
+    elif recent_anomalies >= 3:
+        anomaly_score = 40
+    elif recent_anomalies >= 1:
+        anomaly_score = 70
+    else:
+        anomaly_score = 100
+
+    # 4. 离线历史子分 (10%)
+    offline_incidents = db.query(OfflineIncident).filter(
+        OfflineIncident.device_id == device_id,
+        OfflineIncident.detected_at >= week_ago
+    ).count()
+    if offline_incidents >= 3:
+        offline_history_score = 20
+    elif offline_incidents >= 1:
+        offline_history_score = 60
+    else:
+        offline_history_score = 100
+
+    # 综合评分
+    score = int(
+        online_score * 0.4 +
+        firmware_score * 0.3 +
+        anomaly_score * 0.2 +
+        offline_history_score * 0.1
+    )
+
+    if score >= 90:
+        grade = 'A'
+    elif score >= 70:
+        grade = 'B'
+    elif score >= 50:
+        grade = 'C'
+    else:
+        grade = 'D'
+
+    result = {
+        "device_id": device_id,
+        "score": score,
+        "grade": grade,
+        "online_score": online_score,
+        "firmware_score": firmware_score,
+        "anomaly_score": anomaly_score,
+        "offline_history_score": offline_history_score,
+        "details": {
+            "recent_checks": len(recent_logs),
+            "online_rate": f"{online_score}%",
+            "fw_status": "需更新" if (latest and latest.needs_firmware_update) else "正常",
+            "week_anomalies": recent_anomalies,
+            "week_offline_incidents": offline_incidents,
+        }
+    }
+
+    # 保存到数据库
+    existing = db.query(DeviceHealthScore).filter(
+        DeviceHealthScore.device_id == device_id
+    ).order_by(DeviceHealthScore.calculated_at.desc()).first()
+
+    if not existing or (dt.utcnow() - existing.calculated_at).total_seconds() > 3600:
+        entry = DeviceHealthScore(**result, calculated_at=dt.utcnow())
+        db.add(entry)
+        db.commit()
+
+    return result
+
+
+def get_health_scores_by_org(db: Session) -> list:
+    """获取按机构汇总的健康度"""
+    devices = get_monitored_devices(db)
+    org_scores = {}
+    for d in devices:
+        org = d.owner or '未分配机构'
+        if org not in org_scores:
+            org_scores[org] = {"scores": [], "count": 0}
+        score_data = calculate_device_health(db, d.device_id)
+        org_scores[org]["scores"].append(score_data["score"])
+        org_scores[org]["count"] += 1
+
+    result = []
+    for org, data in org_scores.items():
+        scores = data["scores"]
+        avg = sum(scores) / len(scores) if scores else 0
+        result.append({
+            "organization": org,
+            "avg_score": round(avg, 1),
+            "grade_a_count": sum(1 for s in scores if s >= 90),
+            "grade_b_count": sum(1 for s in scores if 70 <= s < 90),
+            "grade_c_count": sum(1 for s in scores if 50 <= s < 70),
+            "grade_d_count": sum(1 for s in scores if s < 50),
+            "total_devices": data["count"],
+        })
+    result.sort(key=lambda x: x["avg_score"])
+    return result
+
+
+# --- Institution Regions ---
+
+def get_all_regions(db: Session) -> list:
+    return db.query(InstitutionRegion).all()
+
+
+def upsert_region(db: Session, data: dict, username: str) -> InstitutionRegion:
+    existing = db.query(InstitutionRegion).filter(
+        InstitutionRegion.institution_name == data['institution_name']
+    ).first()
+    if existing:
+        for k, v in data.items():
+            if v is not None:
+                setattr(existing, k, v)
+        existing.updated_by = username
+        db.commit()
+        db.refresh(existing)
+        return existing
+    entry = InstitutionRegion(**data, updated_by=username)
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+def get_region_tree(db: Session) -> list:
+    """获取地域树形结构"""
+    regions = db.query(InstitutionRegion).all()
+    tree = {}
+    for r in regions:
+        reg = r.region or '未分类'
+        if reg not in tree:
+            tree[reg] = {}
+        city = r.city or '未分类'
+        if city not in tree[reg]:
+            tree[reg][city] = []
+        tree[reg][city].append(r.institution_name)
+    return [
+        {"region": reg, "cities": [
+            {"city": city, "institutions": insts}
+            for city, insts in cities.items()
+        ]}
+        for reg, cities in tree.items()
+    ]
+
+
+# --- Batch Operations ---
+
+def create_batch_operation(db: Session, op_type: str, target_type: str, target_id: str,
+                           params: dict, username: str) -> BatchOperation:
+    job = BatchOperation(
+        operation_type=op_type,
+        target_type=target_type,
+        target_id=target_id,
+        params=params,
+        status='running',
+        operated_by=username,
+        started_at=datetime.utcnow()
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def update_batch_operation(db: Session, job_id: int, status: str,
+                           affected: int = 0, success: int = 0, failed: int = 0):
+    job = db.query(BatchOperation).filter(BatchOperation.id == job_id).first()
+    if job:
+        job.status = status
+        job.affected_count = affected
+        job.success_count = success
+        job.failed_count = failed
+        job.finished_at = datetime.utcnow()
+        db.commit()
+
+
+def get_batch_operations(db: Session, skip: int = 0, limit: int = 20) -> list:
+    return db.query(BatchOperation).order_by(
+        BatchOperation.created_at.desc()
+    ).offset(skip).limit(limit).all()
+
+
+# --- Command Center ---
+
+def get_command_center_data(db: Session) -> dict:
+    """获取运营指挥中心总览数据"""
+    from datetime import datetime as dt
+
+    devices = get_monitored_devices(db)
+    monitored_ids = [d.device_id for d in devices]
+    institutions = list(set(d.owner or '未分配机构' for d in devices))
+
+    # 在线率
+    statuses = get_latest_device_status(db, device_ids=monitored_ids) if monitored_ids else []
+    online_count = sum(1 for s in statuses if s.is_online)
+    online_rate = round(online_count / len(statuses) * 100, 1) if statuses else 0
+
+    # 健康度汇总
+    health_scores = [calculate_device_health(db, did) for did in monitored_ids]
+    avg_health = round(sum(h['score'] for h in health_scores) / len(health_scores), 1) if health_scores else 100
+
+    # 工单和事件
+    pending_tickets = db.query(AnomalyRecord).filter(AnomalyRecord.status == '待处理').count()
+    pending_incidents = db.query(OfflineIncident).filter(OfflineIncident.status == '待处理').count()
+
+    # 本周趋势（简化为最近7天）
+    today = dt.utcnow().date()
+    weekly_trend = []
+    for i in range(6, -1, -1):
+        d = today - timedelta(days=i)
+        day_logs = db.query(DeviceStatusLog).filter(
+            func.date(DeviceStatusLog.check_time) == d,
+            DeviceStatusLog.device_id.in_(monitored_ids)
+        ).all() if monitored_ids else []
+        day_online = sum(1 for l in day_logs if l.is_online)
+        day_total = len(day_logs)
+        day_anomalies = db.query(AnomalyRecord).filter(
+            AnomalyRecord.record_date == d
+        ).count()
+        weekly_trend.append({
+            "date": d.strftime("%m/%d"),
+            "online_rate": round(day_online / day_total * 100, 1) if day_total else 0,
+            "anomaly_count": day_anomalies,
+        })
+
+    # 高风险机构（按离线设备数）
+    org_offline = {}
+    for s in statuses:
+        if not s.is_online:
+            org = s.organization or '未分配机构'
+            org_offline[org] = org_offline.get(org, 0) + 1
+    top_risk = sorted(org_offline.items(), key=lambda x: -x[1])[:10]
+    top_risk_institutions = [{"name": k, "offline_count": v} for k, v in top_risk]
+
+    # 异常类型分布
+    anomaly_types = db.query(
+        AnomalyRecord.anomaly_type,
+        func.count(AnomalyRecord.id)
+    ).filter(
+        AnomalyRecord.record_date >= today - timedelta(days=7)
+    ).group_by(AnomalyRecord.anomaly_type).all()
+    anomaly_trend = [{"type": t, "count": c} for t, c in anomaly_types]
+
+    # 健康度分布
+    health_dist = {"A": 0, "B": 0, "C": 0, "D": 0}
+    for h in health_scores:
+        health_dist[h["grade"]] = health_dist.get(h["grade"], 0) + 1
+
+    return {
+        "total_devices": len(devices),
+        "total_institutions": len(institutions),
+        "overall_online_rate": online_rate,
+        "overall_health_score": avg_health,
+        "pending_tickets": pending_tickets,
+        "pending_incidents": pending_incidents,
+        "weekly_trend": weekly_trend,
+        "top_risk_institutions": top_risk_institutions,
+        "anomaly_trend": anomaly_trend,
+        "health_distribution": health_dist,
+    }

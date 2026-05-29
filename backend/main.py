@@ -10,7 +10,7 @@ import sys
 
 from database import engine, Base, get_db
 from auth import get_current_user
-from routers import inventory, borrow, ai, dashboard, reminders, analysis, auth, reservation
+from routers import inventory, borrow, ai, dashboard, reminders, analysis, auth, reservation, daily_ops, operations, toolbox
 
 
 def setup_logging():
@@ -53,7 +53,13 @@ async def lifespan(app: FastAPI):
     logger.info("正在初始化数据库表...")
     Base.metadata.create_all(bind=engine)
     logger.info("数据库表初始化完成")
+
+    import scheduler
+    scheduler.start_scheduler()
+
     yield
+
+    scheduler.stop_scheduler()
     logger.info("应用关闭")
 
 
@@ -100,6 +106,9 @@ app.include_router(reminders.router)
 app.include_router(analysis.router)
 app.include_router(auth.router)
 app.include_router(reservation.router)
+app.include_router(daily_ops.router)
+app.include_router(operations.router)
+app.include_router(toolbox.router)
 
 
 @app.get("/operation-logs")
@@ -121,4 +130,4 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

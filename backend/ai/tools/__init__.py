@@ -10,10 +10,11 @@ from .date_utils import make_date_tools
 from .reminder_tools import make_reminder_tools
 from .reservation_tools import make_reservation_tools
 from .alert_tools import make_alert_tools
+from .operations import make_operations_tools
 
 
 def get_all_tools(db) -> list:
-    """返回所有 db 绑定的 LangChain Tools (共19个)"""
+    """返回所有 db 绑定的 LangChain Tools (共23个)"""
     tools = []
     tools.extend(make_inventory_tools(db))
     tools.extend(make_borrow_tools(db))
@@ -26,4 +27,5 @@ def get_all_tools(db) -> list:
     tools.extend(make_reminder_tools(db))
     tools.extend(make_reservation_tools(db))
     tools.extend(make_alert_tools(db))
+    tools.extend(make_operations_tools(db))
     return tools

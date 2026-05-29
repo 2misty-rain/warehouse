@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Custom Slash Commands
+
+| 命令 | 作用 |
+|------|------|
+| `/check` | 快速健康检查：后端导入、前端编译、登录、6个核心API |
+| `/sync-test` | 完整端到端测试：重启服务→配置生产库→刷新设备→工单流转 |
+| `/status` | 项目状态一览：代码、数据库、服务运行状态 |
+
+## Automated Hooks
+
+- **SessionStart**: 每次新会话自动显示 git 分支/变更/路由数
+- **PostToolUse**: 每次编辑 `.py` 文件后自动语法检查
+
 ## Project Overview
 
 AI-powered inventory management system (智能库存管理系统) for managing device inventory with natural language AI commands. Built with FastAPI + Vue 3 + MySQL, using DashScope (阿里云通义千问) for AI Function Calling.

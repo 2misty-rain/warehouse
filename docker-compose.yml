@@ -25,6 +25,12 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:123456@mysql:3306/inventory_db
+      - PRODUCTION_DATABASE_URL=mysql+pymysql://root:123456@mysql:3306/wechat_idc
+      - PRODUCTION_DB_TABLE=operation_device
+      - PRODUCTION_DB_DEVICE_ID_COL=device_id
+      - PRODUCTION_DB_ONLINE_COL=status
+      - PRODUCTION_DB_HEARTBEAT_COL=last_online_time
+      - PRODUCTION_DB_FW_COL=version
     volumes:
       - ./backend:/app
 

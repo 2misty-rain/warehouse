@@ -44,6 +44,17 @@
       </el-col>
     </el-row>
 
+    <el-row :gutter="20" class="stats-row" v-if="opsStats.length > 0">
+      <el-col :span="6" v-for="stat in opsStats" :key="stat.label">
+        <el-card class="stat-card ops-stat" :class="stat.bgClass">
+          <div class="stat-content">
+            <div class="stat-value" :style="{ color: stat.color }">{{ stat.value }}</div>
+            <div class="stat-label">{{ stat.label }}</div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <el-row :gutter="20" class="charts-row">
       <el-col :span="12">
         <el-card>
@@ -75,7 +86,7 @@
 <script>
 import * as echarts from 'echarts';
 import { onMounted, onUnmounted, ref } from 'vue';
-import { dashboardAPI, reservationAPI } from '../api';
+import { dashboardAPI, reservationAPI, opsAPI } from '../api';
 import { ElMessage } from 'element-plus';
 import { Warning, CircleCloseFilled, Clock, Refresh } from '@element-plus/icons-vue';
 
@@ -88,6 +99,7 @@ export default {
     const error = ref(null);
     const lastUpdate = ref('');
     const stats = ref([]);
+    const opsStats = ref([]);
     const alerts = ref({ upcomingTrialEnd: 0, overdueBorrows: 0, longTermBorrows: 0 });
 
     const typeChart = ref(null);
@@ -151,9 +163,31 @@ export default {
       }
     };
 
+    const loadOpsData = async () => {
+      try {
+        const [overviewRes, anomalyRes] = await Promise.all([
+          opsAPI.getDeviceOverview(),
+          opsAPI.getAnomalyStats(),
+        ]);
+        if (overviewRes.success) {
+          let offCount = 0;
+          overviewRes.organizations?.forEach(o => { offCount += o.offline_count; });
+          opsStats.value = [
+            { label: '设备在线率', value: overviewRes.total_online_rate + '%', color: overviewRes.total_online_rate >= 90 ? '#67C23A' : '#F56C6C', bgClass: overviewRes.total_online_rate >= 90 ? 'bg-green' : 'bg-red' },
+            { label: '待处理工单', value: anomalyRes.stats?.['待处理'] || 0, color: '#F56C6C', bgClass: 'bg-red' },
+            { label: '待回访工单', value: anomalyRes.stats?.['待回访'] || 0, color: '#409EFF', bgClass: 'bg-blue' },
+            { label: '本周处理率', value: anomalyRes.stats?.['已完成'] ? Math.round((anomalyRes.stats['已完成'] + (anomalyRes.stats['已归档'] || 0)) / Math.max(1, Object.values(anomalyRes.stats || {}).reduce((a, b) => a + b, 0)) * 100) + '%' : '-', color: '#67C23A', bgClass: 'bg-green' },
+          ];
+        }
+      } catch (e) {
+        // 运营数据加载失败不阻塞仪表盘
+      }
+    };
+
     const refreshAll = () => {
       loadAll();
       loadSalesTrend();
+      loadOpsData();
     };
 
     const updateTypeChart = (typeCount) => {
@@ -211,6 +245,7 @@ export default {
       salesChartInstance = echarts.init(salesChart.value);
       loadAll();
       loadSalesTrend();
+      loadOpsData();
       // 定时刷新
       refreshTimer = setInterval(refreshAll, AUTO_REFRESH_INTERVAL);
       // 监听AI操作后的数据变更事件
@@ -225,7 +260,7 @@ export default {
       window.removeEventListener('ai-data-changed', refreshAll);
     });
 
-    return { stats, alerts, refreshing, loadingSales, error, lastUpdate,
+    return { stats, opsStats, alerts, refreshing, loadingSales, error, lastUpdate,
              typeChart, versionChart, salesChart, refreshAll };
   }
 };

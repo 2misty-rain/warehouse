@@ -24,9 +24,10 @@
           <el-button type="primary" @click="submitChangePassword" :loading="changingPassword">确定</el-button>
         </template>
       </el-dialog>
-      <el-aside width="200px" class="sidebar">
+      <el-aside width="220px" class="sidebar">
         <div class="logo">
-          <h3>库存系统</h3>
+          <h3>Life Radar</h3>
+          <p>智能运营管理平台</p>
         </div>
         <el-menu
           :default-active="activeMenu"
@@ -39,42 +40,81 @@
             <el-icon><Monitor /></el-icon>
             <span>仪表板</span>
           </el-menu-item>
-          <el-menu-item index="inventory" v-if="canAccessInventory">
-            <el-icon><Grid /></el-icon>
-            <span>设备列表</span>
-          </el-menu-item>
-          <el-menu-item index="borrow" v-if="canAccessInventory">
-            <el-icon><DocumentChecked /></el-icon>
-            <span>借用管理</span>
-          </el-menu-item>
-          <el-menu-item index="reservation">
-            <el-icon><Tickets /></el-icon>
-            <span>出库预约</span>
-          </el-menu-item>
-          <el-menu-item index="iot-management" v-if="canAccessInventory">
-            <el-icon><Connection /></el-icon>
-            <span>IoT卡管理</span>
-          </el-menu-item>
+
+          <el-sub-menu index="inventory-sub" v-if="canAccessInventory">
+            <template #title>
+              <el-icon><Box /></el-icon>
+              <span>库存系统</span>
+            </template>
+            <el-menu-item index="inventory">
+              <el-icon><Grid /></el-icon>
+              <span>设备列表</span>
+            </el-menu-item>
+            <el-menu-item index="borrow">
+              <el-icon><DocumentChecked /></el-icon>
+              <span>借用管理</span>
+            </el-menu-item>
+            <el-menu-item index="reservation">
+              <el-icon><Tickets /></el-icon>
+              <span>出库预约</span>
+            </el-menu-item>
+            <el-menu-item index="iot-management">
+              <el-icon><Connection /></el-icon>
+              <span>IoT卡管理</span>
+            </el-menu-item>
+            <el-menu-item index="reminders">
+              <el-icon><Bell /></el-icon>
+              <span>提醒中心</span>
+            </el-menu-item>
+            <el-menu-item index="analytics">
+              <el-icon><DataAnalysis /></el-icon>
+              <span>统计分析</span>
+            </el-menu-item>
+          </el-sub-menu>
+
+          <el-sub-menu index="ops-sub" v-if="canAccessInventory">
+            <template #title>
+              <el-icon><Monitor /></el-icon>
+              <span>运营平台</span>
+            </template>
+            <el-menu-item index="device-monitor">
+              <el-icon><Connection /></el-icon>
+              <span>设备监控</span>
+            </el-menu-item>
+            <el-menu-item index="anomaly-tickets">
+              <el-icon><Warning /></el-icon>
+              <span>异常工单</span>
+            </el-menu-item>
+            <el-menu-item index="ops-reports">
+              <el-icon><Document /></el-icon>
+              <span>数据报告</span>
+            </el-menu-item>
+          </el-sub-menu>
+
           <el-menu-item index="ai-assistant" v-if="isAdmin">
             <el-icon><ChatLineRound /></el-icon>
             <span>AI助手</span>
           </el-menu-item>
-          <el-menu-item index="reminders" v-if="canAccessInventory">
-            <el-icon><Bell /></el-icon>
-            <span>提醒中心</span>
+
+          <el-menu-item index="toolbox">
+            <el-icon><Switch /></el-icon>
+            <span>工具箱</span>
           </el-menu-item>
-          <el-menu-item index="analytics" v-if="canAccessInventory">
-            <el-icon><DataAnalysis /></el-icon>
-            <span>统计分析</span>
-          </el-menu-item>
-          <el-menu-item index="operation-logs" v-if="isAdmin">
-            <el-icon><Document /></el-icon>
-            <span>操作日志</span>
-          </el-menu-item>
-          <el-menu-item index="user-management" v-if="isAdmin">
-            <el-icon><Setting /></el-icon>
-            <span>账号管理</span>
-          </el-menu-item>
+
+          <el-sub-menu index="system-sub" v-if="isAdmin">
+            <template #title>
+              <el-icon><Setting /></el-icon>
+              <span>系统管理</span>
+            </template>
+            <el-menu-item index="operation-logs">
+              <el-icon><Document /></el-icon>
+              <span>操作日志</span>
+            </el-menu-item>
+            <el-menu-item index="user-management">
+              <el-icon><User /></el-icon>
+              <span>账号管理</span>
+            </el-menu-item>
+          </el-sub-menu>
         </el-menu>
       </el-aside>
 
@@ -103,12 +143,17 @@
           <Inventory v-if="activeMenu === 'inventory'" />
           <BorrowManagement v-if="activeMenu === 'borrow'" />
           <IoTManagement v-if="activeMenu === 'iot-management'" />
-          <AIAssistant v-if="activeMenu === 'ai-assistant'" />
           <Reminders v-if="activeMenu === 'reminders'" />
           <Analytics v-if="activeMenu === 'analytics'" />
           <ReservationManagement v-if="activeMenu === 'reservation'" />
+          <DailyOps v-if="activeMenu === 'daily-ops'" />
+          <DeviceMonitor v-if="activeMenu === 'device-monitor'" />
+          <AnomalyTickets v-if="activeMenu === 'anomaly-tickets'" />
+          <OpsReports v-if="activeMenu === 'ops-reports'" />
+          <AIAssistant v-if="activeMenu === 'ai-assistant'" />
           <OperationLogs v-if="activeMenu === 'operation-logs'" />
           <UserManagement v-if="activeMenu === 'user-management'" />
+          <Toolbox v-if="activeMenu === 'toolbox'" />
         </el-main>
       </el-container>
     </el-container>
@@ -118,7 +163,7 @@
 <script>
 import { ref, reactive, computed } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Monitor, Grid, ChatLineRound, Bell, DataAnalysis, DocumentChecked, Connection, Document, ArrowDown, Tickets, Setting } from '@element-plus/icons-vue';
+import { Monitor, Grid, ChatLineRound, Bell, DataAnalysis, DocumentChecked, Connection, Document, ArrowDown, Tickets, Setting, TrendCharts, Box, Warning, User, Switch } from '@element-plus/icons-vue';
 import Login from './components/Login.vue';
 import Register from './components/Register.vue';
 import Dashboard from './components/Dashboard.vue';
@@ -131,6 +176,11 @@ import Reminders from './components/Reminders.vue';
 import Analytics from './components/Analytics.vue';
 import OperationLogs from './components/OperationLogs.vue';
 import UserManagement from './components/UserManagement.vue';
+import DailyOps from './components/DailyOps.vue';
+import DeviceMonitor from './components/DeviceMonitor.vue';
+import AnomalyTickets from './components/AnomalyTickets.vue';
+import OpsReports from './components/OpsReports.vue';
+import Toolbox from './components/Toolbox.vue';
 
 export default {
   name: 'App',
@@ -146,8 +196,14 @@ export default {
     Analytics,
     OperationLogs,
     UserManagement,
+    DailyOps,
+    DeviceMonitor,
+    AnomalyTickets,
+    OpsReports,
+    Toolbox,
     Monitor, Grid, ChatLineRound, Bell, DataAnalysis,
-    DocumentChecked, Connection, Document, ArrowDown, Tickets, Setting
+    DocumentChecked, Connection, Document, ArrowDown, Tickets, Setting, TrendCharts,
+    Box, Warning, User, Switch
   },
   setup() {
     const isLoggedIn = ref(!!localStorage.getItem('access_token'));
@@ -266,8 +322,13 @@ export default {
         'ai-assistant': 'AI助手',
         'reminders': '提醒中心',
         'analytics': '统计分析',
+        'daily-ops': '每日运维',
+        'device-monitor': '设备监控',
+        'anomaly-tickets': '异常工单',
+        'ops-reports': '数据报告',
         'operation-logs': '操作日志',
-        'user-management': '账号管理'
+        'user-management': '账号管理',
+        'toolbox': '工具箱'
       };
       return titles[activeMenu.value] || '仪表板';
     });
@@ -285,19 +346,137 @@ export default {
 
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-#app { height: 100vh; font-family: Avenir, Helvetica, Arial, sans-serif; }
-.sidebar { background-color: #545c64; height: 100vh; position: fixed; top: 0; left: 0; z-index: 100; overflow-y: auto; }
-.el-container { padding-left: 200px; }
-.logo { color: white; text-align: center; padding: 20px 0; border-bottom: 1px solid #444a51; }
-.logo h3 { margin: 0; font-size: 18px; color: #ffffff; }
-.menu { border: none; background-color: #545c64; }
-.menu .el-menu-item { color: #bfcbd9; }
-.menu .el-menu-item:hover { background-color: #444a51; color: #ffffff; }
-.menu .el-menu-item.is-active { background-color: #409EFF; color: #ffffff; }
-.header { background-color: #ffffff; box-shadow: 0 1px 4px rgba(0,21,41,.08); padding: 0 20px; height: 60px; }
+#app { height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+
+/* === Sidebar === */
+.sidebar {
+  background: #2d3348;
+  height: 100vh; position: fixed; top: 0; left: 0; z-index: 100; overflow-y: auto;
+  width: 220px;
+}
+.el-container { padding-left: 220px; }
+
+.logo {
+  color: white; text-align: center; padding: 24px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.logo h3 {
+  margin: 0; font-size: 17px; font-weight: 700; color: #ffffff;
+  letter-spacing: 1px;
+}
+.logo p { margin: 4px 0 0; font-size: 11px; color: rgba(255,255,255,0.55); }
+
+.menu { border: none; background: transparent; }
+.menu .el-menu-item,
+.menu .el-sub-menu__title {
+  color: #bcc3d0;
+  height: 44px; line-height: 44px;
+  font-size: 13px;
+  margin: 2px 8px; border-radius: 8px;
+  transition: all 0.2s;
+}
+.menu .el-menu-item:hover,
+.menu .el-sub-menu__title:hover {
+  background-color: rgba(255,255,255,0.1);
+  color: #e8ebf0;
+}
+.menu .el-menu-item.is-active {
+  background: #1a73e8;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(26,115,232,0.3);
+}
+.menu .el-sub-menu .el-menu-item { padding-left: 56px !important; }
+
+/* === Header === */
+.header {
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 2px 8px rgba(0,0,0,0.04);
+  padding: 0 24px; height: 56px;
+  position: sticky; top: 0; z-index: 50;
+}
 .header-content { display: flex; justify-content: space-between; align-items: center; height: 100%; }
-.header h1 { margin: 0; font-size: 18px; color: #303133; }
+.header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #1a1f36; }
 .user-info { display: flex; align-items: center; }
-.el-dropdown-link { cursor: pointer; color: #409EFF; display: flex; align-items: center; gap: 4px; }
-.main-content { margin-top: 20px; padding: 0 20px 20px 20px; background-color: #f5f7fa; min-height: calc(100vh - 80px); }
+.el-dropdown-link {
+  cursor: pointer; color: #1a73e8; display: flex; align-items: center;
+  gap: 6px; font-size: 13px; font-weight: 500;
+}
+
+/* === Main Content === */
+.main-content {
+  margin-top: 0; padding: 20px 24px 24px 24px;
+  background-color: #f0f2f5; min-height: calc(100vh - 56px);
+}
+
+/* === Global card styles === */
+.el-card {
+  border-radius: 12px !important;
+  border: 1px solid rgba(0,0,0,0.04) !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04) !important;
+  transition: box-shadow 0.3s;
+}
+.el-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08) !important; }
+.el-card__header {
+  padding: 14px 20px !important;
+  border-bottom: 1px solid #f0f0f0 !important;
+  font-weight: 600; font-size: 14px;
+}
+.el-card__body { padding: 20px !important; }
+
+/* === Global table styles === */
+.el-table { border-radius: 8px; overflow: hidden; }
+.el-table th.el-table__cell {
+  background: #f7f8fa !important;
+  color: #5a5f6b; font-weight: 600; font-size: 12px;
+  height: 44px;
+}
+.el-table .el-table__row { height: 48px; }
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: #fafbfc;
+}
+
+/* === Global tag styles === */
+.el-tag {
+  border-radius: 20px; padding: 0 10px; height: 24px; line-height: 22px;
+  font-size: 11px; font-weight: 500;
+}
+
+/* === Global button styles === */
+.el-button { border-radius: 8px; font-weight: 500; }
+.el-button--primary {
+  background: linear-gradient(135deg, #1a73e8 0%, #1557b0 100%);
+  border: none;
+}
+.el-button--primary:hover {
+  background: linear-gradient(135deg, #1d7ff0 0%, #1861c0 100%);
+}
+
+/* === Global dialog styles === */
+.el-dialog { border-radius: 16px; overflow: hidden; }
+.el-dialog__header { padding: 20px 24px 16px; border-bottom: 1px solid #f0f0f0; }
+.el-dialog__body { padding: 24px; }
+.el-dialog__footer { padding: 12px 24px 20px; }
+
+/* === Stat cards (used in dashboard + ops pages) === */
+.stat-card {
+  text-align: center; cursor: default;
+  position: relative; overflow: hidden;
+}
+.stat-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0;
+  height: 4px;
+}
+.stat-card.green::before { background: linear-gradient(90deg, #52c41a, #73d13d); }
+.stat-card.blue::before { background: linear-gradient(90deg, #1a73e8, #4dabf7); }
+.stat-card.orange::before { background: linear-gradient(90deg, #fa8c16, #ffc069); }
+.stat-card.red::before { background: linear-gradient(90deg, #f5222d, #ff7875); }
+.stat-value { font-size: 30px; font-weight: 700; margin: 4px 0; }
+.stat-label { font-size: 12px; color: #8c8c8c; margin-top: 4px; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d9d9d9; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #bfbfbf; }
 </style>

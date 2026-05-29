@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd C:/Users/raco/Desktop/warehouse && echo '=== SESSION START ===' && echo 'Branch:' && git branch --show-current && echo '' && echo 'Changes:' && git status --short && echo '' && echo 'Backend:' && cd backend && python -c \"from routers.operations import router; print(f'  {len(router.routes)} routes')\" 2>/dev/null && echo '' && echo 'Ready.'"
+          }
+        ]
+      }
+    ]
+  }
+}

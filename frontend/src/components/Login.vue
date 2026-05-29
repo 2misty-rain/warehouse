@@ -31,7 +31,7 @@ import { ref, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { authAPI } from '../api/index.js';
 
-const emit = defineEmits(['login-success']);
+const emit = defineEmits(['login-success', 'go-register']);
 const formRef = ref(null);
 const loading = ref(false);
 
