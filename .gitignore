@@ -80,3 +80,12 @@ Thumbs.db
 
 # Uploads
 uploads/
+
+# Daily ops downloaded data (not source code)
+daily_ops_data/
+
+# E2E test scripts
+test_e2e.py
+
+# Claude Code local settings (personal, not shared)
+.claude/settings.local.json
